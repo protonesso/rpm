@@ -9,6 +9,7 @@
 #if defined(__linux__)
 #include <sys/personality.h>
 #endif
+#include <sys/mman.h>
 #include <sys/utsname.h>
 
 #include <rpm/rpmlog.h>
@@ -47,6 +48,8 @@ struct _FD_s {
     int		nrefs;
     int		flags;
 #define	RPMIO_DEBUG_IO		0x40000000
+#define	RPMIO_FSYNC		0x20000000
+#define	RPMIO_NONBLOCK		0x10000000
     int		magic;
 #define	FDMAGIC			0x04463138
     FDSTACK_t	fps;
@@ -220,7 +223,7 @@ static void fdstat_print(FD_t fd, const char * msg, FILE * fp)
 	switch (opx) {
 	case FDSTAT_READ:
 	    if (msg) fprintf(fp, "%s:", msg);
-	    fprintf(fp, "%8d reads, %8ld total bytes in %d.%06d secs\n",
+	    fprintf(fp, "%8d  reads, %8ld total bytes in %d.%06d secs\n",
 		op->count, (long)op->bytes,
 		(int)(op->usecs/usec_scale), (int)(op->usecs%usec_scale));
 	    break;
@@ -233,6 +236,18 @@ static void fdstat_print(FD_t fd, const char * msg, FILE * fp)
 	case FDSTAT_SEEK:
 	    break;
 	case FDSTAT_CLOSE:
+	    break;
+	case FDSTAT_SYNC:
+	    if (msg) fprintf(fp, "%s:", msg);
+	    fprintf(fp, "%8d  syncs, in %d.%06d secs\n",
+		op->count,
+		(int)(op->usecs/usec_scale), (int)(op->usecs%usec_scale));
+	    break;
+	case FDSTAT_INCORE:
+	    if (msg) fprintf(fp, "%s:", msg);
+	    fprintf(fp, "%8d incore, in %d.%06d secs\n",
+		op->count,
+		(int)(op->usecs/usec_scale), (int)(op->usecs%usec_scale));
 	    break;
 	}
     }
@@ -1360,6 +1375,134 @@ int Fseek(FD_t fd, off_t offset, int whence)
     return rc;
 }
 
+int Fallocate(FD_t fd, off_t offset, off_t len)
+{
+    int rc = -1;
+
+    if (fd != NULL) {
+	int fdno = Fileno(fd);
+#if defined(HAVE_POSIX_FALLOCATE)
+	rc = posix_fallocate(fdno, offset, len);
+#endif
+    }
+
+    DBGIO(fd, (stderr, "==>\tFallocate(%p,%ld,%ld) rc %d\n",
+	  fd, (long)offset, (long)len, rc));
+
+    return rc;
+}
+
+int Fadvise(FD_t fd, off_t offset, off_t len, int advice)
+{
+    int rc = -1;
+
+    if (fd != NULL) {
+	int fdno = Fileno(fd);
+	fdstat_enter(fd, FDSTAT_SYNC);
+	switch (advice) {
+	default:
+	    errno = EINVAL;
+	    break;
+#if defined(HAVE_POSIX_FADVISE)
+	case POSIX_FADV_NORMAL:
+	case POSIX_FADV_SEQUENTIAL:
+	case POSIX_FADV_RANDOM:
+	case POSIX_FADV_NOREUSE:
+	case POSIX_FADV_WILLNEED:
+	case POSIX_FADV_DONTNEED:
+	    rc = posix_fadvise(fdno, offset, len, advice);
+	    break;
+#endif
+	}
+	fdstat_exit(fd, FDSTAT_SYNC, 0);
+    }
+
+    DBGIO(fd, (stderr, "==>\tFadvise(%p,%ld,%ld,%d) rc %d\n",
+	  fd, (long)offset, (long)len, advice, rc));
+
+    return rc;
+}
+
+int Fdatasync(FD_t fd)
+{
+    int rc = -1;
+
+    if (fd != NULL) {
+	int fdno = Fileno(fd);
+#if defined(HAVE_FDATASYNC)
+	fdstat_enter(fd, FDSTAT_SYNC);
+	rc = fdatasync(fdno);
+	fdstat_exit(fd, FDSTAT_SYNC, 0);
+#endif
+    }
+
+    DBGIO(fd, (stderr, "==>\tFdatasync(%p) rc %d\n", fd, rc));
+
+    return rc;
+}
+
+int Fsync(FD_t fd)
+{
+    int rc = -1;
+
+    if (fd != NULL) {
+	int fdno = Fileno(fd);
+	fdstat_enter(fd, FDSTAT_SYNC);
+	rc = fsync(fdno);
+	fdstat_exit(fd, FDSTAT_SYNC, 0);
+    }
+
+    DBGIO(fd, (stderr, "==>\tFsync(%p) rc %d\n", fd, rc));
+
+    return rc;
+}
+
+int Fincore(FD_t fd, int nincore)
+{
+    size_t pagesize = sysconf(_SC_PAGESIZE);
+    void * mapped = MAP_FAILED;
+    size_t nmapped = 0;
+    unsigned char * vec = NULL;;
+    int rc = 0;
+
+    fdstat_enter(fd, FDSTAT_INCORE);
+    if (fd != NULL) {
+	int fdno = Fileno(fd);
+	struct stat sb;
+	size_t npages;
+
+	if (fstat(fdno, &sb) < 0
+	 || sb.st_size == 0)
+	    goto exit;
+
+	nmapped = sb.st_size;
+	mapped = mmap(NULL, nmapped, PROT_NONE, MAP_PRIVATE, fdno, 0);
+	if (mapped == MAP_FAILED)
+	    goto exit;
+	npages = (nmapped + pagesize-1)/pagesize;
+	vec = xmalloc(npages+1);
+	if (mincore(mapped, nmapped, vec))
+	    goto exit;
+	rc = 0;
+	for (size_t i = 0; i < npages; i++) {
+	    if (vec[i] & 0x1)
+		rc++;
+	}
+    }
+
+exit:
+    if (vec)
+	free(vec);
+    if (mapped != MAP_FAILED)
+	(void) munmap(mapped, nmapped);
+    if (nincore > 0 && rc >= 0)
+	nincore -= rc;
+    fdstat_exit(fd, FDSTAT_INCORE, nincore * pagesize);
+    DBGIO(fd, (stderr, "==>\tFincore(%p,%d) rc %d\n", fd, nincore, rc));
+
+    return rc;
+}
+
 int Fclose(FD_t fd)
 {
     int rc = 0, ec = 0;
@@ -1368,6 +1511,24 @@ int Fclose(FD_t fd)
 	return -1;
 
     fd = fdLink(fd);
+
+    if (fd->flags & RPMIO_FSYNC) {
+
+	/* Get no. of pages currently incore. */
+	int nincore = Fincore(fd, 0);
+
+	/* Attempt fsync (if requested), warn on failure. */
+	if (Fdatasync(fd)
+#if defined(POSIX_FADV_DONTNEED)
+	 || Fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)
+#endif
+	 || Fsync(fd))
+	    rpmlog(RPMLOG_WARNING, "Fsync failed: %m");
+
+	/* Accumulate no. of pages remaining incore. */
+	nincore = Fincore(fd, nincore);
+    }
+
     fdstat_enter(fd, FDSTAT_CLOSE);
     for (FDSTACK_t fps = fd->fps; fps != NULL; fps = fdPop(fd)) {
 	if (fps->fdno >= 0) {
@@ -1456,9 +1617,25 @@ static void cvtfmode (const char *m,
 	    if (--nstdio > 0) *stdio++ = c;
 	    continue;
 	    break;
-	case '?':
-	    flags |= RPMIO_DEBUG_IO;
+	case 'S':		/* XXX do fsync on close */
+	    flags |= RPMIO_FSYNC;
+#ifdef	NOTYET
 	    if (--nother > 0) *other++ = c;
+#endif
+	    continue;
+	    break;
+	case 'N':		/* XXX do asynchronous fsync on close */
+	    flags |= RPMIO_NONBLOCK;
+#ifdef	NOTYET
+	    if (--nother > 0) *other++ = c;
+#endif
+	    continue;
+	    break;
+	case '?':		/* XXX debug this fd */
+	    flags |= RPMIO_DEBUG_IO;
+#ifdef	NOTYET
+	    if (--nother > 0) *other++ = c;
+#endif
 	    continue;
 	    break;
 	default:

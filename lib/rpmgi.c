@@ -56,6 +56,12 @@ static FD_t rpmgiOpen(const char * path, const char * fmode)
 	if (fd != NULL) (void) Fclose(fd);
 	fd = NULL;
     }
+
+#if defined(POZIX_FADV_WILLNEED)
+    if (fd)
+	(void) Fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+#endif
+
     free(fn);
 
     return fd;

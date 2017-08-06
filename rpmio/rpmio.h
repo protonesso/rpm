@@ -55,6 +55,31 @@ int Fseek(FD_t fd, off_t offset, int whence);
 off_t Ftell(FD_t fd);
 
 /** \ingroup rpmio
+ * POSIX fallocate(3) clone.
+ */
+int Fallocate(FD_t fd, off_t offset, off_t len);
+
+/** \ingroup rpmio
+ * POSIX fadvise(3) clone.
+ */
+int Fadvise(FD_t fd, off_t offset, off_t len, int advice);
+
+/** \ingroup rpmio
+ * fdatasync(3) clone.
+ */
+int Fdatasync(FD_t fd);
+
+/** \ingroup rpmio
+ * fsync(3) clone.
+ */
+int Fsync(FD_t fd);
+
+/** \ingroup rpmio
+ * mincore(2) wrapper onto a mmaop'able fd..
+ */
+int Fincore(FD_t fd, int nincore);
+
+/** \ingroup rpmio
  * fclose(3) clone.
  */
 int Fclose( FD_t fd);
@@ -128,7 +153,9 @@ typedef enum fdOpX_e {
     FDSTAT_SEEK		= 2,	/*!< Seek statistics index. */
     FDSTAT_CLOSE	= 3,	/*!< Close statistics index */
     FDSTAT_DIGEST	= 4,	/*!< Digest statistics index. */
-    FDSTAT_MAX		= 5
+    FDSTAT_SYNC		= 5,	/*!< Sync statistics index. */
+    FDSTAT_INCORE	= 6,	/*!< Incore statistics index. */
+    FDSTAT_MAX
 } fdOpX;
 
 /** \ingroup rpmio

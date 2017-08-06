@@ -2272,6 +2272,13 @@ int rpmfiArchiveReadToFilePsm(rpmfi fi, FD_t fd, int nodigest, rpmpsm psm)
     int rc = 0;
     char buf[BUFSIZ*4];
 
+    /* Preallocate the file size (for writing). */
+    rc = Fallocate(fd, 0, left);
+    if (rc) {
+	rc = RPMERR_WRITE_FAILED;
+	goto exit;
+    }
+
     if (!nodigest) {
 	digestalgo = rpmfiDigestAlgo(fi);
 	fidigest = rpmfilesFDigest(fi->files, rpmfiFX(fi), NULL, NULL);

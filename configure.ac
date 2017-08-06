@@ -768,8 +768,11 @@ AC_TYPE_SIZE_T
 dnl Checks for library functions.
 AC_CHECK_FUNCS(putenv)
 AC_CHECK_FUNCS(mempcpy)
+AC_CHECK_FUNCS(posix_fadvise)
+AC_CHECK_FUNCS(posix_fallocate)
 AC_CHECK_FUNCS(fdatasync)
 AC_CHECK_DECLS(fdatasync, [], [], [#include <unistd.h>])
+AC_CHECK_FUNCS(mincore)
 AC_CHECK_FUNCS(lutimes)
 AC_CHECK_FUNCS(mergesort)
 AC_CHECK_FUNCS(getauxval)

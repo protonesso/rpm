@@ -121,6 +121,9 @@ void * rpmShowProgress(const void * arg,
 	    }
 	} else
 	    fd = fdLink(fd);
+#if defined(POSIX_FADV_WILLNEED)
+	(void) Fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+#endif
 	return (void *)fd;
 	break;
 
