@@ -33,4 +33,5 @@ export CPPFLAGS="-DLUA_COMPAT_APIINTCASTS"
     --with-crypto=openssl \
     --with-uuid \
     --with-lmdb \
-    --with-zstd
+    --with-zstd \
+    --with-libeio
