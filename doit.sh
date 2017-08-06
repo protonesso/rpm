@@ -32,4 +32,5 @@ export CPPFLAGS="-DLUA_COMPAT_APIINTCASTS"
     --enable-silent-rules \
     --with-crypto=openssl \
     --with-uuid \
-    --with-lmdb
+    --with-lmdb \
+    --with-zstd
