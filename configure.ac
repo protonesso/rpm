@@ -210,7 +210,7 @@ dnl # Facebook Zstd
 RPM_CHECK_LIB(
     [Facebook Zstd], [zstd],
     [zstd], [ZSTD_versionNumber], [zstd.h],
-    [yes,external:none], [zstd:lib:lib],
+    [no,external:none], [zstd:lib:lib],
     [
     ], [])
 
@@ -441,21 +441,21 @@ RPM_CHECK_LIB(
     ], [])
 
 #=================
-# Check for lmdb library.
-dnl # LMDB
+# Check for libev library.
+dnl # Libev
 RPM_CHECK_LIB(
-    [LMDB], [lmdb],
-    [lmdb], [mdb_env_open], [lmdb.h],
+    [Libev], [libev],
+    [ev], [ev_run], [ev.h],
     [no,external:none], [],
     [
     ], [])
 
 #=================
-# Check for uuid library.
+# Check for libeio library.
 RPM_CHECK_LIB(
-    [OSSP uuid], [uuid],
-    [ossp-uuid], [uuid_import], [uuid.h],
-    [no,system:none], [],
+    [Libeio], [libeio],
+    [ev-eio eio], [eio_init], [eio.h],
+    [no,external:none], [],
     [
     ], [])
 
@@ -466,7 +466,7 @@ enable_lmdb=no
 RPM_CHECK_LIB(
     [LMDB], [lmdb],
     [lmdb], [mdb_env_open], [lmdb.h],
-    [no,internal:external:none], [lmdb/libraries/liblmdb],
+    [no,external:none], [lmdb/libraries/liblmdb],
     [
         enable_lmdb=yes
         AC_DEFINE(ENABLE_LMDB, 1, [Enable lmdb database format?])
