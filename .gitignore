@@ -26,6 +26,7 @@ Makefile.in.in
 /Doxytags
 /aclocal.m4
 /autom4te.cache
+/compile
 /db.h
 /debugedit
 /depcomp
