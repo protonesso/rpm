@@ -417,6 +417,25 @@ AC_SUBST(WITH_MAGIC_INCLUDE)
 AC_SUBST(WITH_MAGIC_LIB)
 
 #=================
+# Check for uuid library.
+RPM_CHECK_LIB(
+    [OSSP uuid], [uuid],
+    [ossp-uuid], [uuid_import], [uuid.h],
+    [no,system:none], [],
+    [
+    ], [])
+
+#=================
+# Check for lmdb library.
+dnl # LMDB
+RPM_CHECK_LIB(
+    [LMDB], [lmdb],
+    [lmdb], [mdb_env_open], [lmdb.h],
+    [no,external:none], [],
+    [
+    ], [])
+
+#=================
 # Check for popt library.
 WITH_POPT_INCLUDE=
 WITH_POPT_LIB=

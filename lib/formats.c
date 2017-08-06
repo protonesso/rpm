@@ -462,6 +462,200 @@ static char * expandFormat(rpmtd td, char **emsg)
     return rpmExpand(rpmtdGetString(td), NULL);
 }
 
+#if defined(HAVE_UUID_H)
+#include <uuid.h>
+#endif
+
+/* create uuid's */
+static int uuidMake(int version, const char *ns, const char *data,
+		char *buf_str, unsigned char *buf_bin, char **emsg)
+{
+    int rc = -1;	/* assume error */
+#if defined(WITH_UUID)
+    uuid_t *uuid = NULL;
+    uuid_t *uuid_ns = NULL;
+    uuid_rc_t uurc;
+    char *result_ptr;
+    size_t result_len;
+
+    if ((uurc=uuid_create(&uuid))) goto exit;
+
+    switch (version) {
+    case 1:
+	if ((uurc=uuid_make(uuid, UUID_MAKE_V1))) goto exit;
+	break;
+    case 3:
+	if ((uurc=uuid_create(&uuid_ns))
+	 || (uurc=uuid_load(uuid_ns, ns))
+	 || (uurc=uuid_make(uuid, UUID_MAKE_V3, uuid_ns, data)))
+	    goto exit;
+	break;
+    case 4:
+	if ((uurc=uuid_make(uuid, UUID_MAKE_V4))) goto exit;
+	break;
+    case 5:
+	if ((uurc=uuid_create(&uuid_ns))
+	 || (uurc=uuid_load(uuid_ns, ns))
+	 || (uurc=uuid_make(uuid, UUID_MAKE_V5, uuid_ns, data)))
+	    goto exit;
+	break;
+    default:
+	goto exit;
+	break;
+    }
+
+    if (buf_str) {
+	result_ptr = buf_str;
+	result_len = UUID_LEN_STR+1;
+	if ((uurc=uuid_export(uuid, UUID_FMT_STR, &result_ptr, &result_len))) goto exit;
+    }
+    if (buf_bin) {
+	result_ptr = (char *) buf_bin;
+	result_len = UUID_LEN_BIN;
+	if ((uurc=uuid_export(uuid, UUID_FMT_BIN, &result_ptr, &result_len))) goto exit;
+    }
+    rc = 0;
+
+exit:
+    if (uuid) (void) uuid_destroy(uuid);
+    if (uuid_ns) (void) uuid_destroy(uuid_ns);
+    if (uurc && emsg)
+	*emsg = rpmExpand("UUID creation failed: ", uuid_error(uurc), NULL);
+#endif	/* WITH_UUID */
+    return rc;
+}
+
+static char * uuidv1Format(rpmtd td, char **emsg)
+{
+#if defined(WITH_UUID)
+    struct timeval tv;
+    uint64_t uuid_time;
+    uint8_t uuid_bin[128/8];
+
+    /* Retrieve the tag timestamp. */
+    tv.tv_sec = rpmtdGetNumber(td);
+    tv.tv_usec = 0;	/* XXX needs hires timestamps. */
+
+    /* Convert timestamp to UUID epoch. */
+    uuid_time = (tv.tv_sec * 10000000ULL) +
+		(tv.tv_usec * 10ULL) +
+		0x01B21DD213814000ULL;
+
+    /* Retrieve a UUIDv1 timestamp for current time. */
+    if (uuidMake(1, NULL, NULL, NULL, uuid_bin, emsg)) {
+	return NULL;
+    }
+
+    /* Convert now to retrieved tag timestamp. */
+    uuid_bin[6] &= 0xf0;	/* preserve version, clear time_hi nibble */
+    uuid_bin[8] &= 0xc0;	/* preserve variant, clear clock */
+    uuid_bin[9] ^= 0x00;
+
+    uuid_bin[3] = (uint8_t)(uuid_time >>  0);
+    uuid_bin[2] = (uint8_t)(uuid_time >>  8);
+    uuid_bin[1] = (uint8_t)(uuid_time >> 16);
+    uuid_bin[0] = (uint8_t)(uuid_time >> 24);
+    uuid_bin[5] = (uint8_t)(uuid_time >> 32);
+    uuid_bin[4] = (uint8_t)(uuid_time >> 40);
+    uuid_bin[6] |= (uint8_t)(uuid_time >> 56) & 0x0f;
+
+    /* Reformat converted UUID as string. */
+    {	uuid_t *uuid = NULL;
+	uuid_rc_t uurc;
+	char * uuid_str = NULL;
+	if ((uurc=uuid_create(&uuid)) == UUID_RC_OK
+	 && (uurc=uuid_import(uuid, UUID_FMT_BIN, uuid_bin, 128/8)) == UUID_RC_OK
+	 && (uurc=uuid_export(uuid, UUID_FMT_STR, &uuid_str, NULL)) == UUID_RC_OK
+	 && (uurc=uuid_destroy(uuid)) == UUID_RC_OK)
+	    return uuid_str;
+	if (emsg)
+	    *emsg = rpmExpand("UUID reformat failed: ", uuid_error(uurc), NULL);
+    }
+#else
+    *emsg = rpmExpand("RPM+UUID is not enabled.", NULL);
+#endif	/* WITH_UUID */
+    return NULL;
+}
+
+/* UUID namespace values. */
+static const char rpmuuid_ns[] = "ns:URL";
+static const char rpmuuid_auth[] = "%{?_uuid_auth}%{!?_uuid_auth:http://rpm.org}";
+static const char rpmuuid_path[] = "%{?_uuid_path}%{!?_uuid_path:/package}";
+static uint32_t rpmuuid_version = 5;
+
+/* Convert a scalar tag string to a UUID. */
+static char * str2uuid(rpmtd td, char ** emsg, int version)
+{
+#if defined(WITH_UUID)
+    const char * ns = NULL;
+    const char * tagn = rpmTagGetName(rpmtdTag(td));
+    char * s = NULL;
+    char *val = NULL;
+    uint8_t uuid_bin[128/8];
+
+    switch (version) {
+    default:
+	version = rpmuuid_version;
+	/*@fallthrough@*/
+    case 3:
+    case 5:
+	switch (rpmtdClass(td)) {
+	case RPM_NUMERIC_CLASS:
+	    rasprintf(&val, "%" PRIu64, rpmtdGetNumber(td));
+	    break;
+	case RPM_STRING_CLASS: {
+	    const char *str = rpmtdGetString(td);
+	    if (str)
+		val = xstrdup(str);
+	    break;
+	}
+	case RPM_BINARY_CLASS:
+	    val = pgpHexStr(td->data, td->count);
+	    break;
+	default:
+	    *emsg = xstrdup("(unknown type)");
+	    return NULL;
+	    break;
+	}
+
+	ns = rpmuuid_ns;
+	s = rpmGetPath(rpmuuid_auth, "/", rpmuuid_path, "/", tagn, "/",
+			val, NULL);
+	if (val)
+	    free((void *)val);
+	break;
+    case 4:
+	break;
+    }
+
+    char uuid_str[64];
+    if (uuidMake((int)version, ns, s, uuid_str, uuid_bin, emsg)) {
+	free((void *)s);
+	return NULL;
+    }
+    free((void *)s);
+    return xstrdup(uuid_str);
+#else
+    *emsg = rpmExpand("RPM+UUID is not enabled.", NULL);
+#endif	/* WITH_UUID */
+    return NULL;
+}
+
+static char * uuidv3Format(rpmtd td, char **emsg)
+{
+    return str2uuid(td, emsg, 3);
+}
+
+static char * uuidv4Format(rpmtd td, char **emsg)
+{
+    return str2uuid(td, emsg, 4);
+}
+
+static char * uuidv5Format(rpmtd td, char **emsg)
+{
+    return str2uuid(td, emsg, 5);
+}
+
 static const struct headerFmt_s rpmHeaderFormats[] = {
     { RPMTD_FORMAT_STRING,	"string",
 	RPM_ANY_CLASS,		stringFormat },
@@ -472,7 +666,7 @@ static const struct headerFmt_s rpmHeaderFormats[] = {
     { RPMTD_FORMAT_PGPSIG,	"pgpsig",
 	RPM_BINARY_CLASS,	pgpsigFormat },
     { RPMTD_FORMAT_DEPFLAGS,	"depflags",
-	RPM_NUMERIC_CLASS, depflagsFormat },
+	RPM_NUMERIC_CLASS,	depflagsFormat },
     { RPMTD_FORMAT_DEPTYPE,	"deptype",
 	RPM_NUMERIC_CLASS,	deptypeFormat },
     { RPMTD_FORMAT_FFLAGS,	"fflags",
@@ -505,6 +699,14 @@ static const struct headerFmt_s rpmHeaderFormats[] = {
 	RPM_STRING_CLASS,	expandFormat },
     { RPMTD_FORMAT_FSTATUS,	"fstatus",
 	RPM_NUMERIC_CLASS,	fstatusFormat },
+    { RPMTD_FORMAT_UUIDV1,	"uuidv1",
+	RPM_NUMERIC_CLASS,	uuidv1Format },
+    { RPMTD_FORMAT_UUIDV3,	"uuidv3",
+	RPM_ANY_CLASS,		uuidv3Format },
+    { RPMTD_FORMAT_UUIDV4,	"uuidv4",
+	RPM_ANY_CLASS,		uuidv4Format },
+    { RPMTD_FORMAT_UUIDV5,	"uuidv5",
+	RPM_ANY_CLASS,		uuidv5Format },
     { -1,			NULL, 		0,	NULL }
 };
 

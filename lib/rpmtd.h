@@ -243,6 +243,10 @@ typedef enum rpmtdFormats_e {
     RPMTD_FORMAT_VFLAGS		= 17,	/* file verify flags (int types) */
     RPMTD_FORMAT_EXPAND		= 18,	/* macro expansion (string types) */
     RPMTD_FORMAT_FSTATUS	= 19,	/* file verify status (int types) */
+    RPMTD_FORMAT_UUIDV1		= 20,	/* format as uuid v1 (any type) */
+    RPMTD_FORMAT_UUIDV3		= 21,	/* format as uuid v3 (any type) */
+    RPMTD_FORMAT_UUIDV4		= 22,	/* format as uuid v4 (any type) */
+    RPMTD_FORMAT_UUIDV5		= 23,	/* format as uuid v5 (any type) */
 } rpmtdFormats;
 
 /** \ingroup rpmtd
