@@ -1654,17 +1654,20 @@ rpmeioStart(rpmeio eio)
 	eio = _eio;
 
     if (eio->respipe[0] < 0) {
-	rc = pipe(eio->respipe);
-	if (!rc)
-	    rc = eio_init(want_poll, done_poll);
+	if ((rc = pipe(eio->respipe))
+	 || (rc = fcntl(eio->respipe[0], F_SETFD, FD_CLOEXEC))
+	 || (rc = fcntl(eio->respipe[1], F_SETFD, FD_CLOEXEC))
+	 || (rc = eio_init(want_poll, done_poll))
+	 || (rc = atexit(rpmeioCleanup))
+	) {
+	    rpmlog(RPMLOG_ERR, "%s: cannot create event loop: %m\n", __FUNCTION__);
+	    goto exit
+	}
 	eio_set_min_parallel(128);
 	eio_set_max_idle(128);
 
 	unsigned nthreads = eio_nthreads();
 	rpmlog(RPMLOG_DEBUG, "%s: nthreads %u\n", __FUNCTION__, nthreads);
-
-	if (!rc)
-	    rc = atexit(rpmeioCleanup);
     }
 
 exit:
