@@ -327,5 +327,13 @@ rpmcliInit(int argc, char *const argv[], struct poptOption * optionsTable)
 	rpmIncreaseVerbosity();
     }
 
+#if defined(WITH_LIBEIO)
+    /* Start libeio event loop. */
+    rc = rpmeioStart(NULL);
+    if (rc)
+	fprintf(stderr, _("%s: event loop failed to start (%d)\n"),
+		xgetprogname(), rc);
+#endif
+
     return optCon;
 }

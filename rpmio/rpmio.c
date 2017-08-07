@@ -1503,12 +1503,194 @@ exit:
     return rc;
 }
 
+/* =============================================================== */
+#if defined(WITH_LIBEIO)
+#include "eio.h"
+#include "poll.h"
+#include "pthread.h"		/* XXX for pthread_yoeld() */
+
+struct rpmeio_s {
+    int respipe [2];
+    int last_fd;
+};
+
+static struct rpmeio_s __eio = {
+    .respipe = {-1, -1},
+    .last_fd= -1,
+};
+static rpmeio _eio;
+
+static void
+want_poll (void)
+{
+    char dummy;
+    if (_eio)
+	write (_eio->respipe[1], &dummy, 1);
+}
+
+static void
+done_poll (void)
+{
+    char dummy;
+    if (_eio)
+	read (_eio->respipe[0], &dummy, 1);
+}
+
+static int
+rpmeioLoop(rpmeio eio)
+{
+    int rc = -1;
+
+    if (eio == NULL)
+	eio = _eio;
+    if (eio) {
+	struct pollfd pfds[] = { [0] = { eio->respipe[0], POLLIN, 0 } };
+	nfds_t npfds = sizeof(pfds)/sizeof(pfds[0]);
+	int timeout = -1;
+	while (eio_nreqs()) {
+	    poll(pfds, npfds, timeout);
+	    rc = eio_poll();
+	}
+    }
+    return rc;
+}
+
+static int
+fsync_cb (eio_req *req)
+{
+    FD_t fd = NULL;
+    int rc = -1;
+
+    if (req) {
+	fd = (FD_t) req->data;
+	rc = req->result;
+	if (rc < 0)
+	    errno = req->errorno;
+	else {
+	    fd->flags &= ~RPMIO_NONBLOCK;
+	    fd->flags &= ~RPMIO_FSYNC;
+	    rc = Fclose(fd);
+	    pthread_yield();	/* XXX likely unneeded. */
+	    if (eio_npending() >= 1) eio_poll();
+	}
+    }
+    return rc;
+}
+
+static int
+fdatasync_cb (eio_req *req)
+{
+    FD_t fd = NULL;
+    int rc = -1;
+
+    if (req) {
+	fd = (FD_t) req->data;
+	rc = req->result;
+	if (rc < 0)
+	    errno = req->errorno;
+	else {
+	    int fdno = Fileno(fd);
+#if defined(POSIX_FADV_DONTNEED)
+	    rc = Fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+	    if (!rc)
+#endif
+	    {
+		eio_fsync(fdno, 0, fsync_cb, fd);
+	    }
+	    pthread_yield();	/* XXX likely unneeded. */
+	    if (eio_npending() >= 1) eio_poll();
+	}
+    }
+
+    return rc;
+}
+
+static void
+rpmeioCleanup(void)
+{
+    rpmeio eio = _eio;
+    if (eio) {
+	unsigned nthreads = eio_nthreads();
+	unsigned nready = eio_nready();
+	unsigned npend = eio_npending();
+	unsigned nreqs = eio_nreqs();
+
+	rpmlog(RPMLOG_DEBUG, "%s: nthreads %u nready %u npending %u nreqs %u\n", __FUNCTION__, nthreads, nready, npend, nreqs);
+	
+	rpmeioLoop(eio);
+
+	eio->last_fd = -1;
+	if (eio->respipe[0] >= 0)
+	    close(eio->respipe[0]);
+	eio->respipe[0] = -1;
+	if (eio->respipe[1] >= 0)
+	    close(eio->respipe[1]);
+	eio->respipe[1] = -1;
+	_eio = NULL;
+    }
+}
+
+int
+rpmeioStop(rpmeio eio)
+{
+    int rc = -1;
+    if (eio == NULL)
+	eio = _eio;
+    if (eio) {
+	rpmeioCleanup();
+	rc = 0;
+    }
+    return rc;
+}
+
+int
+rpmeioStart(rpmeio eio)
+{
+    int rc = 0;
+
+    if (_eio)
+	goto exit;
+
+    _eio = (eio ? eio : &__eio);
+    if (eio == NULL)
+	eio = _eio;
+
+    if (eio->respipe[0] < 0) {
+	rc = pipe(eio->respipe);
+	if (!rc)
+	    rc = eio_init(want_poll, done_poll);
+	eio_set_min_parallel(128);
+	eio_set_max_idle(128);
+
+	unsigned nthreads = eio_nthreads();
+	rpmlog(RPMLOG_DEBUG, "%s: nthreads %u\n", __FUNCTION__, nthreads);
+
+	if (!rc)
+	    rc = atexit(rpmeioCleanup);
+    }
+
+exit:
+    return rc;
+}
+#endif	/* WITH_LIBEIO */
+
+/* =============================================================== */
 int Fclose(FD_t fd)
 {
     int rc = 0, ec = 0;
 
     if (fd == NULL)
 	return -1;
+
+    if (fd->flags & RPMIO_NONBLOCK) {
+        fd->flags &= ~RPMIO_NONBLOCK;
+#if defined(WITH_LIBEIO)
+	eio_fdatasync(Fileno(fd), 0, fdatasync_cb, fd);
+	pthread_yield();	/* XXX likely unneeded. */
+	if (eio_npending() >= 1) eio_poll();
+	return 0;
+#endif  /* WITH_LIBEIO */
+    }
 
     fd = fdLink(fd);
 

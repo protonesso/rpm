@@ -94,6 +94,14 @@ FD_t	Fdopen(FD_t ofd, const char * fmode);
 FD_t	Fopen(const char * path,
 			const char * fmode);
 
+/** \ingroup rpmio
+ * Event loop start/stop operations.
+ * @param eio		event loop data (NULL uses global event loop)
+ * @return		0 on success
+ */
+int	rpmeioStart(rpmeio eio);
+int	rpmeioStop(rpmeio eio);
+
 
 /** \ingroup rpmio
  * fflush(3) clone.

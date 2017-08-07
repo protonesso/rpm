@@ -97,6 +97,11 @@ typedef struct rpmRelocation_s rpmRelocation;
  */
 typedef struct _FD_s * FD_t;
 
+/** \ingroup rpmtypes 
+ * RPM EIO event loop type
+ */
+typedef struct rpmeio_s * rpmeio;
+
 /** \ingroup rpmtypes
  * Package read return codes.
  */
