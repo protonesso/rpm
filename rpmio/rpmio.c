@@ -1615,7 +1615,6 @@ rpmeioCleanup(void)
 	
 	rpmeioLoop(eio);
 
-	eio->last_fd = -1;
 	if (eio->respipe[0] >= 0)
 	    close(eio->respipe[0]);
 	eio->respipe[0] = -1;
@@ -1661,7 +1660,7 @@ rpmeioStart(rpmeio eio)
 	 || (rc = atexit(rpmeioCleanup))
 	) {
 	    rpmlog(RPMLOG_ERR, "%s: cannot create event loop: %m\n", __FUNCTION__);
-	    goto exit
+	    goto exit;
 	}
 	eio_set_min_parallel(128);
 	eio_set_max_idle(128);
