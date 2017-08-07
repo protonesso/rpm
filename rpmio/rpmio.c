@@ -1567,8 +1567,6 @@ fsync_cb (eio_req *req)
 	if (rc < 0)
 	    errno = req->errorno;
 	else {
-	    fd->flags &= ~RPMIO_NONBLOCK;
-	    fd->flags &= ~RPMIO_FSYNC;
 	    rc = Fclose(fd);
 	    pthread_yield();	/* XXX likely unneeded. */
 	    if (eio_npending() >= 1) eio_poll();
@@ -1685,7 +1683,10 @@ int Fclose(FD_t fd)
     if (fd->flags & RPMIO_NONBLOCK) {
         fd->flags &= ~RPMIO_NONBLOCK;
 #if defined(WITH_LIBEIO)
-	eio_fdatasync(Fileno(fd), 0, fdatasync_cb, fd);
+	if (fd->flags & RPMIO_FSYNC) {
+	    fd->flags &= ~RPMIO_FSYNC;
+	    eio_fdatasync(Fileno(fd), 0, fdatasync_cb, fd);
+	}
 	pthread_yield();	/* XXX likely unneeded. */
 	if (eio_npending() >= 1) eio_poll();
 	return 0;
