@@ -1511,19 +1511,17 @@ exit:
 
 struct rpmeio_s {
     int respipe [2];
-    int last_fd;
 };
 
 static struct rpmeio_s __eio = {
     .respipe = {-1, -1},
-    .last_fd= -1,
 };
 static rpmeio _eio;
 
 static void
 want_poll (void)
 {
-    char dummy;
+    char dummy = '!';
     if (_eio)
 	write (_eio->respipe[1], &dummy, 1);
 }
@@ -1543,6 +1541,7 @@ rpmeioLoop(rpmeio eio)
 
     if (eio == NULL)
 	eio = _eio;
+
     if (eio) {
 	struct pollfd pfds[] = { [0] = { eio->respipe[0], POLLIN, 0 } };
 	nfds_t npfds = sizeof(pfds)/sizeof(pfds[0]);
@@ -1558,11 +1557,10 @@ rpmeioLoop(rpmeio eio)
 static int
 fsync_cb (eio_req *req)
 {
-    FD_t fd = NULL;
     int rc = -1;
 
     if (req) {
-	fd = (FD_t) req->data;
+	FD_t fd = (FD_t) req->data;
 	rc = req->result;
 	if (rc < 0)
 	    errno = req->errorno;
@@ -1578,11 +1576,10 @@ fsync_cb (eio_req *req)
 static int
 fdatasync_cb (eio_req *req)
 {
-    FD_t fd = NULL;
     int rc = -1;
 
     if (req) {
-	fd = (FD_t) req->data;
+	FD_t fd = (FD_t) req->data;
 	rc = req->result;
 	if (rc < 0)
 	    errno = req->errorno;
@@ -1607,6 +1604,7 @@ static void
 rpmeioCleanup(void)
 {
     rpmeio eio = _eio;
+
     if (eio) {
 	unsigned nthreads = eio_nthreads();
 	unsigned nready = eio_nready();
@@ -1632,8 +1630,10 @@ int
 rpmeioStop(rpmeio eio)
 {
     int rc = -1;
+
     if (eio == NULL)
 	eio = _eio;
+
     if (eio) {
 	rpmeioCleanup();
 	rc = 0;
