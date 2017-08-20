@@ -25,9 +25,6 @@ export CPPFLAGS="-DLUA_COMPAT_APIINTCASTS"
     --with-cap \
     --with-acl \
     --enable-ndb \
-    --with-uuid \
-    --with-lmdb \
-    --with-zstd \
     --enable-python \
     --enable-silent-rules \
     --with-crypto=openssl \

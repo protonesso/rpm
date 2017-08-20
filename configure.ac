@@ -204,18 +204,29 @@ AC_CHECK_HEADERS([lzma.h],[
 AC_SUBST(WITH_LZMA_LIB)
 
 #=================
-# Check for zstd library.
+# Check for zstd.
 
-dnl # Facebook Zstd
-RPM_CHECK_LIB(
-    [Facebook Zstd], [zstd],
-    [zstd], [ZSTD_versionNumber], [zstd.h],
-    [no,external:none], [zstd:lib:lib],
-    [
-    ], [])
+AC_ARG_ENABLE([zstd],
+              [AS_HELP_STRING([--enable-zstd=@<:@yes/no/auto@:>@],
+                              [build without zstd support (default=auto)])],
+              [enable_zstd="$enableval"],
+              [enable_zstd=auto])
 
-WITH_ZSTD_LIB="$WITH_ZSTD"
-AC_SUBST(WITH_ZSTD_LIB)
+AS_IF([test "x$enable_zstd" != "xno"], [
+  PKG_CHECK_MODULES([ZSTD], [libzstd], [have_zstd=yes], [have_zstd=no])
+  AS_IF([test "$enable_zstd" = "yes"], [
+    if test "$have_zstd" = "no"; then
+      AC_MSG_ERROR([--enable-zstd specified, but not available])
+    fi
+  ])
+])
+
+if test "x$have_zstd" = "xyes"; then
+  AC_DEFINE([HAVE_ZSTD], [1], [Define if libzstd is available])
+  ZSTD_REQUIRES=libzstd
+  AC_SUBST(ZSTD_REQUIRES)
+fi
+AM_CONDITIONAL([HAVE_ZSTD], [test "x$have_zstd" = "xyes"])
 
 #=================
 
