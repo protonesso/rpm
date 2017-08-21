@@ -45,7 +45,6 @@ librpmio_la_LIBADD = \
 	@WITH_LIBELF_LIB@ \
 	@WITH_POPT_LIB@ \
 	@WITH_LZMA_LIB@ \
-	$(ZSTD_LIBS) \
 	-lpthread
 
 if WITH_INTERNAL_BEECRYPT

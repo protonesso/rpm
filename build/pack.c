@@ -348,7 +348,7 @@ static char *getIOFlags(Package pkg)
 	    compr = "lzma";
 	    (void) rpmlibNeedsFeature(pkg, "PayloadIsLzma", "4.4.6-1");
 #endif
-#ifdef HAVE_ZSTD
+#ifdef HAVE_ZSTD_H
 	} else if (rstreq(s+1, "zstdio")) {
 	    compr = "zstd";
 	    /* Add prereq on rpm version that understands zstd payloads */
