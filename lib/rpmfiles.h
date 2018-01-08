@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include <rpm/rpmtypes.h>
-#include <rpm/rpmvf.h>
 #include <rpm/rpmpgp.h>
 
 /** \ingroup rpmfiles
@@ -60,11 +59,44 @@ enum rpmfileAttrs_e {
     RPMFILE_README	= (1 <<  8),	/*!< from %%readme */
     /* bits 9-10 unused */
     RPMFILE_PUBKEY	= (1 << 11),	/*!< from %%pubkey */
+    RPMFILE_ARTIFACT	= (1 << 12),	/*!< from %%artifact */
 };
 
 typedef rpmFlags rpmfileAttrs;
 
 #define	RPMFILE_ALL	~(RPMFILE_NONE)
+
+/** \ingroup rpmvf
+ * Exported file verify attributes (ie RPMTAG_FILEVERIFYFLAGS) +
+ * bits used for reporting failures.
+ */
+enum rpmVerifyAttrs_e {
+    RPMVERIFY_NONE	= 0,		/*!< */
+    RPMVERIFY_MD5	= (1 << 0),	/*!< from %verify(md5) - obsolete */
+    RPMVERIFY_FILEDIGEST= (1 << 0),	/*!< from %verify(filedigest) */
+    RPMVERIFY_FILESIZE	= (1 << 1),	/*!< from %verify(size) */
+    RPMVERIFY_LINKTO	= (1 << 2),	/*!< from %verify(link) */
+    RPMVERIFY_USER	= (1 << 3),	/*!< from %verify(user) */
+    RPMVERIFY_GROUP	= (1 << 4),	/*!< from %verify(group) */
+    RPMVERIFY_MTIME	= (1 << 5),	/*!< from %verify(mtime) */
+    RPMVERIFY_MODE	= (1 << 6),	/*!< from %verify(mode) */
+    RPMVERIFY_RDEV	= (1 << 7),	/*!< from %verify(rdev) */
+    RPMVERIFY_CAPS	= (1 << 8),	/*!< from %verify(caps) */
+	/* bits 9-14 unused, reserved for rpmVerifyAttrs */
+    RPMVERIFY_CONTEXTS	= (1 << 15),	/*!< verify: from --nocontexts */
+	/* bits 16-22 used in rpmVerifyFlags */
+	/* bits 23-27 used in rpmQueryFlags */
+    RPMVERIFY_READLINKFAIL= (1 << 28),	/*!< readlink failed */
+    RPMVERIFY_READFAIL	= (1 << 29),	/*!< file read failed */
+    RPMVERIFY_LSTATFAIL	= (1 << 30),	/*!< lstat failed */
+    RPMVERIFY_LGETFILECONFAIL	= (1 << 31)	/*!< lgetfilecon failed */
+};
+
+typedef rpmFlags rpmVerifyAttrs;
+
+#define	RPMVERIFY_ALL		~(RPMVERIFY_NONE)
+#define	RPMVERIFY_FAILURES	\
+  (RPMVERIFY_LSTATFAIL|RPMVERIFY_READFAIL|RPMVERIFY_READLINKFAIL|RPMVERIFY_LGETFILECONFAIL)
 
 /** \ingroup rpmfiles
  * File disposition(s) during package install/erase transaction.
@@ -138,13 +170,16 @@ typedef rpmFlags rpmfiFlags;
     (RPMFI_NOFILECLASS | RPMFI_NOFILEDEPS | RPMFI_NOFILELANGS | \
      RPMFI_NOFILECOLORS | RPMFI_NOFILEVERIFYFLAGS)
 
-#define RPMFI_FLAGS_ONLY_FILENAMES \
+#define RPMFI_FLAGS_FILETRIGGER \
     (RPMFI_NOFILECLASS | RPMFI_NOFILEDEPS | RPMFI_NOFILELANGS | \
      RPMFI_NOFILEUSER | RPMFI_NOFILEGROUP | RPMFI_NOFILEMODES | \
      RPMFI_NOFILESIZES | RPMFI_NOFILECAPS | RPMFI_NOFILELINKTOS | \
      RPMFI_NOFILEDIGESTS | RPMFI_NOFILEMTIMES | RPMFI_NOFILERDEVS | \
-     RPMFI_NOFILEINODES | RPMFI_NOFILESTATES | RPMFI_NOFILECOLORS | \
+     RPMFI_NOFILEINODES | RPMFI_NOFILECOLORS | \
      RPMFI_NOFILEVERIFYFLAGS | RPMFI_NOFILEFLAGS)
+
+#define RPMFI_FLAGS_ONLY_FILENAMES \
+    (RPMFI_FLAGS_FILETRIGGER | RPMFI_NOFILESTATES)
 
 typedef enum rpmFileIter_e {
     RPMFI_ITER_FWD	= 0,

@@ -158,6 +158,35 @@ runroot rpm \
 ])
 AT_CLEANUP
 
+AT_SETUP([parametrized macro 5])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define '%foo() %#:%{?1:"%1"}%{?2: "%2"}' \
+    --define 'bar zzz' \
+    --eval '%foo 1' \
+    --eval '%foo   2  ' \
+    --eval '%foo 1 2' \
+    --eval '%foo %{nil}' \
+    --eval '%foo %{nil} xx' \
+    --eval '%foo %{bar} xx' \
+    --eval '%foo %{quote:   2 3  5} %{quote:%{nil}}' \
+    --eval '%foo x%{quote:y}z 123' \
+    --eval '%foo x%{quote:%{nil}}z' \
+],
+[0],
+[1:"1"
+1:"2"
+2:"1" "2"
+0:
+1:"xx"
+2:"zzz" "xx"
+2:"   2 3  5" ""
+2:"xyz" "123"
+1:"xz"
+])
+AT_CLEANUP
+
 AT_SETUP([uncompress macro])
 AT_KEYWORDS([macros])
 AT_CHECK([
@@ -268,89 +297,76 @@ runroot rpm \
 )
 AT_CLEANUP
 
-AT_SETUP([macro arguments in double quotes])
-AT_KEYWORDS([macros arguments])
+AT_SETUP([%define + %undefine in nested levels 1])
+AT_KEYWORDS([macros define undefine])
 AT_CHECK([
-runroot rpm --define "%foo() 1:%1 2:%2" --eval '%foo "argument 1" argument_2'
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-         --eval '%foo "argument 1" argument_2 """"""'
-
+# basic %define in nested scoping level
 runroot rpm \
-        --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval '%foo "arg. number 1""arg. number 2" "arg number 3" "" normal'
-
-runroot rpm \
-        --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval '%foo "arg. number 1"normal"arg. number 2" '
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval '%foo """jjj"""aa"" '
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" --eval '%foo xx"yy""zz""""bb" '
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand:%undefine xxx} %{echo:%xxx}' \
+    --eval .'%foo'.
 ],
 [0],
-[1:argument 1 2:argument_2
-1:argument 1 2:argument_2 3: 4: 5:
-1:arg. number 1 2:arg. number 2 3:arg number 3 4: 5:normal
-1:arg. number 1 2:normal 3:arg. number 2 4:%4 5:%5
-1: 2:jjj 3: 4:aa 5:
-1:xx 2:yy 3:zz 4: 5:bb
+[1
+%xxx
+.   .
 ])
 AT_CLEANUP
 
-AT_SETUP([macro arguments in single + double quotes])
-AT_KEYWORDS([macros arguments])
+AT_SETUP([%define + %undefine in nested levels 2])
+AT_KEYWORDS([macros define])
 AT_CHECK([
-
+# %define macro once in a nested scope
 runroot rpm \
-        --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval "%foo 'arg. number 1''arg. number 2' 'arg number 3' '' normal"
-
-runroot rpm \
-        --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval "%foo 'arg. number 1'normal'arg. number 2'''normal "
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval "%foo '''jjj'''aa'' "
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" \
-        --eval "%foo ''\"jjj\"''aa\"\" "
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" --eval "%foo xx'yy''zz''''bb' "
-
-runroot rpm --define "%foo() 1:%1 2:%2 3:%3 4:%4 5:%5" --eval "%foo xx'yy'\"zz\"\"\"'bb' "
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx'
 ],
 [0],
-[1:arg. number 1 2:arg. number 2 3:arg number 3 4: 5:normal
-1:arg. number 1 2:normal 3:arg. number 2 4: 5:normal
-1: 2:jjj 3: 4:aa 5:
-1: 2:jjj 3: 4:aa 5:
-1:xx 2:yy 3:zz 4: 5:bb
-1:xx 2:yy 3:zz 4: 5:bb
+[1
+. .
+%xxx
 ])
 AT_CLEANUP
 
-AT_SETUP([%undefine from different scopes])
-AT_KEYWORDS([macros %undefine])
+AT_SETUP([%define + %undefine in nested levels 3])
+AT_KEYWORDS([macros define])
 AT_CHECK([
-runroot rpmbuild --quiet -bb \
-	    --define '%test1 ok'\
-	    /data/SPECS/macro-scope.spec
+AT_XFAIL_IF([test $RPM_XFAIL -ne 0])
+# %define macro twice in a nested scope
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand: %define xxx 2} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx'
 ],
 [0],
-[],
-[warning: Macro %a01 defined but not used within scope
-warning: Macro %a05 defined but not used within scope
-warning: Macro %a07 defined but not used within scope
-warning: Macro %a08 defined but not used within scope
-warning: Macro %a09 defined but not used within scope
-warning: Macro %a0A defined but not used within scope]
-)
+[1
+2
+.    .
+%xxx
+])
 AT_CLEANUP
 
-
-
+AT_SETUP([%define + %undefine in nested levels 4])
+AT_KEYWORDS([macros define global])
+AT_CHECK([
+AT_XFAIL_IF([test $RPM_XFAIL -ne 0])
+# %define in a nested level covered by %global
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand: %global xxx 2} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx' \
+    --eval .'%undefine xxx'. \
+    --eval '%xxx'
+],
+[0],
+[1
+2
+.    .
+2
+..
+%xxx
+])
+AT_CLEANUP
 
 AT_SETUP([%define in conditional macro])
 AT_KEYWORDS([macros])
@@ -367,5 +383,41 @@ runroot rpm \
 bar
 true
 bar
+])
+AT_CLEANUP
+
+AT_SETUP([%verbose negative test])
+AT_KEYWORDS([macros verbose])
+AT_CHECK([
+runroot rpm \
+  --eval '%{verbose:%{echo:is verbose}}' \
+  --eval '%{verbose:is verbose text}'\
+  --eval '%{!verbose:%{echo:is not verbose}}'\
+  --eval '%{!verbose:is not verbose text}'
+],
+[0],
+[
+
+is not verbose
+
+is not verbose text
+])
+AT_CLEANUP
+
+AT_SETUP([%verbose positive test])
+AT_KEYWORDS([macros verbose])
+AT_CHECK([
+runroot rpm -v \
+  --eval '%{!verbose:%{echo:is not verbose}}' \
+  --eval '%{!verbose:is not verbose text}'\
+  --eval '%{verbose:%{echo:is verbose}}'\
+  --eval '%{verbose:is verbose text}'
+],
+[0],
+[
+
+is verbose
+
+is verbose text
 ])
 AT_CLEANUP

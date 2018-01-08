@@ -538,12 +538,7 @@ static int build(rpmts ts, const char * arg, BTA_t ba, const char * rcfile)
     rpmVSFlags vsflags, ovsflags;
 
     vsflags = rpmExpandNumeric("%{_vsflags_build}");
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
     ovsflags = rpmtsSetVSFlags(ts, vsflags);
 
     if (build_targets == NULL) {
@@ -619,8 +614,12 @@ int main(int argc, char *argv[])
 	argerror(_("arguments to --root (-r) must begin with a /"));
     }
 
-    /* rpmbuild is rather chatty by default */
-    rpmSetVerbosity(quiet ? RPMLOG_WARNING : RPMLOG_INFO);
+    /* rpmbuild runs in verbose mode by default */
+    if (rpmlogSetMask(0) < RPMLOG_MASK(RPMLOG_INFO))
+	rpmSetVerbosity(RPMLOG_INFO);
+
+    if (quiet)
+	rpmSetVerbosity(RPMLOG_WARNING);
 
     if (rpmcliPipeOutput && initPipe())
 	exit(EXIT_FAILURE);

@@ -17,6 +17,8 @@
 #include "lib/rpmfi_internal.h" /* rpmfiles stuff for now */
 #include "lib/misc.h"
 
+#include "lib/backend/dbiset.h"
+
 #include "debug.h"
 
 const char * const RPMVERSION = VERSION;
@@ -510,7 +512,7 @@ int rpmtsAddEraseElement(rpmts ts, Header h, int dboffset)
 }
 
 /* Cached rpmdb provide lookup, returns 0 if satisfied, 1 otherwise */
-static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
+static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep, dbiIndexSet *matches)
 {
     const char * Name = rpmdsN(dep);
     const char * DNEVR = rpmdsDNEVR(dep);
@@ -524,7 +526,7 @@ static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
     unsigned int keyhash = 0;
 
     /* See if we already looked this up */
-    if (prune) {
+    if (prune && !matches) {
 	keyhash = depCacheKeyHash(dcache, DNEVR);
 	if (depCacheGetHEntry(dcache, DNEVR, keyhash, &cachedrc, NULL, NULL)) {
 	    rc = *cachedrc;
@@ -533,6 +535,8 @@ static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
 	}
     }
 
+    if (matches)
+	*matches = dbiIndexSetNew(0);
     /*
      * See if a filename dependency is a real file in some package,
      * taking file state into account: replaced, wrong colored and
@@ -546,6 +550,10 @@ static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
 		unsigned int instance = headerGetInstance(h);
 		if (instance && instance == rpmdsInstance(dep))
 		    continue;
+	    }
+	    if (matches) {
+		dbiIndexSetAppendOne(*matches, headerGetInstance(h), 0, 0);
+		continue;
 	    }
 	    rpmdsNotify(dep, "(db files)", rc);
 	    break;
@@ -577,6 +585,10 @@ static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
 		    match = 0;
 	    }
 	    if (match) {
+		if (matches) {
+		    dbiIndexSetAppendOne(*matches, headerGetInstance(h), 0, 0);
+		    continue;
+		}
 		rpmdsNotify(dep, "(db provides)", rc);
 		break;
 	    }
@@ -585,11 +597,79 @@ static int rpmdbProvides(rpmts ts, depCache dcache, rpmds dep)
     }
     rc = (h != NULL) ? 0 : 1;
 
+    if (matches) {
+	dbiIndexSetUniq(*matches, 0);
+	rc = dbiIndexSetCount(*matches) ? 0 : 1;
+    }
+
     /* Cache the relatively expensive rpmdb lookup results */
     /* Caching the oddball non-pruned case would mess up other results */
-    if (prune)
+    if (prune && !matches)
 	depCacheAddHEntry(dcache, xstrdup(DNEVR), keyhash, rc);
     return rc;
+}
+
+static dbiIndexSet unsatisfiedDependSet(rpmts ts, rpmds dep)
+{
+    dbiIndexSet set1 = NULL, set2 = NULL;
+    tsMembers tsmem = rpmtsMembers(ts);
+    rpmsenseFlags dsflags = rpmdsFlags(dep);
+
+    if (dsflags & RPMSENSE_RPMLIB)
+	goto exit;
+
+    if (rpmdsIsRich(dep)) {
+	rpmds ds1, ds2; 
+	rpmrichOp op;
+	char *emsg = 0; 
+
+	if (rpmdsParseRichDep(dep, &ds1, &ds2, &op, &emsg) != RPMRC_OK) {
+	    rpmdsNotify(dep, emsg ? emsg : "(parse error)", 1);  
+	    _free(emsg);
+	    goto exit;
+	}
+	/* only a subset of ops is supported in set mode */
+	if (op != RPMRICHOP_WITH && op != RPMRICHOP_WITHOUT
+            && op != RPMRICHOP_OR && op != RPMRICHOP_SINGLE) {
+	    rpmdsNotify(dep, "(unsupported op in set mode)", 1);  
+	    goto exit_rich;
+	}
+
+	set1 = unsatisfiedDependSet(ts, ds1);
+	if (op == RPMRICHOP_SINGLE)
+	    goto exit_rich;
+	if (op != RPMRICHOP_OR && dbiIndexSetCount(set1) == 0)
+	    goto exit_rich;
+	set2 = unsatisfiedDependSet(ts, ds2);
+	if (op == RPMRICHOP_WITH) {
+	    dbiIndexSetFilterSet(set1, set2, 0);
+	} else if (op == RPMRICHOP_WITHOUT) {
+	    dbiIndexSetPruneSet(set1, set2, 0);
+	} else if (op == RPMRICHOP_OR) {
+	    dbiIndexSetAppendSet(set1, set2, 0);
+	}
+exit_rich:
+	ds1 = rpmdsFree(ds1);
+	ds2 = rpmdsFree(ds2);
+	goto exit;
+    }
+
+    /* match database entries */
+    rpmdbProvides(ts, NULL, dep, &set1);
+
+    /* Pretrans dependencies can't be satisfied by added packages. */
+    if (!(dsflags & RPMSENSE_PRETRANS)) {
+	rpmte *matches = rpmalAllSatisfiesDepend(tsmem->addedPackages, dep);
+	if (matches) {
+	    for (rpmte *p = matches; *p; p++)
+		dbiIndexSetAppendOne(set1, rpmalLookupTE(tsmem->addedPackages, *p), 1, 0);
+	}
+	_free(matches);
+    }
+
+exit:
+    set2 = dbiIndexSetFree(set2);
+    return set1 ? set1 : dbiIndexSetNew(0);
 }
 
 /**
@@ -643,30 +723,48 @@ retry:
 	    _free(emsg);
 	    goto exit;
 	}
-	if (op == RPMRICHOP_IF) {
+	if (op == RPMRICHOP_WITH || op == RPMRICHOP_WITHOUT) {
+	    /* switch to set mode processing */
+	    dbiIndexSet set = unsatisfiedDependSet(ts, dep);
+	    rc = dbiIndexSetCount(set) ? 0 : 1;
+	    dbiIndexSetFree(set);
+	    ds1 = rpmdsFree(ds1);
+	    ds2 = rpmdsFree(ds2);
+	    rpmdsNotify(dep, "(rich)", rc);
+	    goto exit;
+	}
+	if (op == RPMRICHOP_IF || op == RPMRICHOP_UNLESS) {
+	    /* A IF B -> A OR NOT(B) */
+	    /* A UNLESS B -> A AND NOT(B) */
 	    if (rpmdsIsRich(ds2)) {
-		/* check if this is a IF...ELSE combination */
+		/* check if this has an ELSE clause */
 		rpmds ds21 = NULL, ds22 = NULL;
 		rpmrichOp op2;
 		if (rpmdsParseRichDep(ds2, &ds21, &ds22, &op2, NULL) == RPMRC_OK && op2 == RPMRICHOP_ELSE) {
-		    rc = unsatisfiedDepend(ts, dcache, ds21);
-		    if (rc) {
-			rpmdsFree(ds1);
-			ds1 = ds22;
-			ds22 = NULL;
+		    /* A IF B ELSE C -> (A OR NOT(B)) AND (C OR B) */
+		    /* A UNLESS B ELSE C -> (A AND NOT(B)) OR (C AND B) */
+		    rc = !unsatisfiedDepend(ts, dcache, ds21);	/* NOT(B) */
+		    if ((rc && op == RPMRICHOP_IF) || (!rc && op == RPMRICHOP_UNLESS)) {
+			rc = unsatisfiedDepend(ts, dcache, ds1);	/* A */
+		    } else {
+			rc = unsatisfiedDepend(ts, dcache, ds22);	/* C */
 		    }
-		    rc = 1;
+		    rpmdsFree(ds21);
+		    rpmdsFree(ds22);
+		    goto exitrich;
 		}
 		rpmdsFree(ds21);
 		rpmdsFree(ds22);
 	    }
-	    if (!rc)
-		rc = !unsatisfiedDepend(ts, dcache, ds2);
-	}
-	if (op != RPMRICHOP_IF || rc)
+	    rc = !unsatisfiedDepend(ts, dcache, ds2);	/* NOT(B) */
+	    if ((rc && op == RPMRICHOP_IF) || (!rc && op == RPMRICHOP_UNLESS))
+		rc = unsatisfiedDepend(ts, dcache, ds1);
+	} else {
 	    rc = unsatisfiedDepend(ts, dcache, ds1);
-	if ((rc && op == RPMRICHOP_OR) || (!rc && op == RPMRICHOP_AND))
-	    rc = unsatisfiedDepend(ts, dcache, ds2);
+	    if ((rc && op == RPMRICHOP_OR) || (!rc && op == RPMRICHOP_AND))
+		rc = unsatisfiedDepend(ts, dcache, ds2);
+	}
+exitrich:
 	ds1 = rpmdsFree(ds1);
 	ds2 = rpmdsFree(ds2);
 	rpmdsNotify(dep, "(rich)", rc);
@@ -683,7 +781,7 @@ retry:
     }
 
     /* See if the rpmdb provides it */
-    if (rpmdbProvides(ts, dcache, dep) == 0)
+    if (rpmdbProvides(ts, dcache, dep, NULL) == 0)
 	goto exit;
 
     /* Search for an unsatisfied dependency. */

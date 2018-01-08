@@ -8,7 +8,7 @@
 #include "imaevm.h"
 
 #include <rpm/rpmlog.h>		/* rpmlog */
-#include <rpm/rpmstring.h>	/* rnibble */
+#include <rpm/rpmfi.h>
 #include <rpm/rpmpgp.h>		/* rpmDigestLength */
 #include "lib/header.h"		/* HEADERGET_MINMEM */
 #include "lib/rpmtypes.h"	/* rpmRC */
@@ -32,22 +32,18 @@ static const char *hash_algo_name[] = {
 
 #define ARRAY_SIZE(a)  (sizeof(a) / sizeof(a[0]))
 
-static char *signFile(const char *algo, const char *fdigest, int diglen,
-const char *key, char *keypass)
+static char *signFile(const char *algo, const uint8_t *fdigest, int diglen,
+const char *key, char *keypass, uint32_t *siglenp)
 {
     char *fsignature;
     unsigned char digest[diglen];
     unsigned char signature[MAX_SIGNATURE_LENGTH];
     int siglen;
 
-    /* convert file digest hex to binary */
-    memset(digest, 0, diglen);
     /* some entries don't have a digest - we return an empty signature */
-    if (strlen(fdigest) != diglen * 2)
+    memset(digest, 0, diglen);
+    if (memcmp(digest, fdigest, diglen) == 0)
         return strdup("");
-
-    for (int i = 0; i < diglen; ++i, fdigest += 2)
-	digest[i] = (rnibble(fdigest[0]) << 4) | rnibble(fdigest[1]);
 
     /* prepare file signature */
     memset(signature, 0, MAX_SIGNATURE_LENGTH);
@@ -60,76 +56,75 @@ const char *key, char *keypass)
 	return NULL;
     }
 
+    *siglenp = siglen + 1;
     /* convert file signature binary to hex */
     fsignature = pgpHexStr(signature, siglen+1);
     return fsignature;
 }
 
-static uint32_t signatureLength(const char *algo, int diglen, const char *key,
-char *keypass)
+rpmRC rpmSignFiles(Header sigh, Header h, const char *key, char *keypass)
 {
-    unsigned char digest[diglen];
-    unsigned char signature[MAX_SIGNATURE_LENGTH];
-
-    memset(digest, 0, diglen);
-    memset(signature, 0, MAX_SIGNATURE_LENGTH);
-    signature[0] = '\x03';
-
-    uint32_t siglen = sign_hash(algo, digest, diglen, key, keypass,
-				signature+1);
-    return siglen + 1;
-}
-
-rpmRC rpmSignFiles(Header h, const char *key, char *keypass)
-{
-    struct rpmtd_s digests;
+    struct rpmtd_s td;
     int algo;
     int diglen;
-    uint32_t siglen;
+    uint32_t siglen = 0;
     const char *algoname;
-    const char *digest;
-    char *signature;
-    rpmRC rc = RPMRC_OK;
+    const uint8_t *digest;
+    char *signature = NULL;
+    rpmRC rc = RPMRC_FAIL;
+    rpmfi fi = rpmfiNew(NULL, h, RPMTAG_BASENAMES, RPMFI_FLAGS_QUERY);
 
-    algo = headerGetNumber(h, RPMTAG_FILEDIGESTALGO);
-    if (!algo) {
-        /* use default algorithm */
-        algo = PGPHASHALGO_MD5;
-    } else if (algo < 0 || algo >= ARRAY_SIZE(hash_algo_name)) {
+    if (rpmfiFC(fi) == 0) {
+	rc = RPMRC_OK;
+	goto exit;
+    }
+
+    algo = rpmfiDigestAlgo(fi);
+    if (algo >= ARRAY_SIZE(hash_algo_name)) {
 	rpmlog(RPMLOG_ERR, _("File digest algorithm id is invalid"));
-	return RPMRC_FAIL;
+	goto exit;
     }
 
     diglen = rpmDigestLength(algo);
     algoname = hash_algo_name[algo];
-    if (!algoname) {
-	rpmlog(RPMLOG_ERR, _("hash_algo_name failed\n"));
-	return RPMRC_FAIL;
-    }
 
-    headerDel(h, RPMTAG_FILESIGNATURELENGTH);
-    headerDel(h, RPMTAG_FILESIGNATURES);
-    siglen = signatureLength(algoname, diglen, key, keypass);
-    headerPutUint32(h, RPMTAG_FILESIGNATURELENGTH, &siglen, 1);
+    headerDel(sigh, RPMTAG_FILESIGNATURELENGTH);
+    headerDel(sigh, RPMTAG_FILESIGNATURES);
 
-    headerGet(h, RPMTAG_FILEDIGESTS, &digests, HEADERGET_MINMEM);
-    while ((digest = rpmtdNextString(&digests))) {
-	signature = signFile(algoname, digest, diglen, key, keypass);
+    rpmtdReset(&td);
+    td.tag = RPMSIGTAG_FILESIGNATURES;
+    td.type = RPM_STRING_ARRAY_TYPE;
+    td.data = NULL; /* set in the loop below */
+    td.count = 1;
+
+    while (rpmfiNext(fi) >= 0) {
+	digest = rpmfiFDigest(fi, NULL, NULL);
+	signature = signFile(algoname, digest, diglen, key, keypass, &siglen);
 	if (!signature) {
 	    rpmlog(RPMLOG_ERR, _("signFile failed\n"));
-	    rc = RPMRC_FAIL;
 	    goto exit;
 	}
-	if (!headerPutString(h, RPMTAG_FILESIGNATURES, signature)) {
-	    free(signature);
+	td.data = &signature;
+	if (!headerPut(sigh, &td, HEADERPUT_APPEND)) {
 	    rpmlog(RPMLOG_ERR, _("headerPutString failed\n"));
-	    rc = RPMRC_FAIL;
 	    goto exit;
 	}
-	free(signature);
+	signature = _free(signature);
     }
 
+    if (siglen > 0) {
+	rpmtdReset(&td);
+	td.tag = RPMSIGTAG_FILESIGNATURELENGTH;
+	td.type = RPM_INT32_TYPE;
+	td.data = &siglen;
+	td.count = 1;
+	headerPut(sigh, &td, HEADERPUT_DEFAULT);
+    }
+
+    rc = RPMRC_OK;
+
 exit:
-    rpmtdFreeData(&digests);
+    free(signature);
+    rpmfiFree(fi);
     return rc;
 }

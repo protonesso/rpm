@@ -128,9 +128,6 @@ static void queryArgCallback(poptContext con,
     QVA_t qva = &rpmQVKArgs;
 
     switch (opt->val) {
-    case 'c': qva->qva_flags |= QUERY_FOR_CONFIG | QUERY_FOR_LIST; break;
-    case 'd': qva->qva_flags |= QUERY_FOR_DOCS | QUERY_FOR_LIST; break;
-    case 'L': qva->qva_flags |= QUERY_FOR_LICENSE | QUERY_FOR_LIST; break;
     case 'l': qva->qva_flags |= QUERY_FOR_LIST; break;
     case 's': qva->qva_flags |= QUERY_FOR_STATE | QUERY_FOR_LIST;
 	break;
@@ -153,15 +150,15 @@ static void queryArgCallback(poptContext con,
 	break;
 
     case RPMCLI_POPT_NOFILEDIGEST:
-	qva->qva_flags |= VERIFY_FILEDIGEST;
+	qva->qva_ofvattr |= RPMVERIFY_FILEDIGEST;
 	break;
 
     case RPMCLI_POPT_NOCONTEXTS:
-	qva->qva_flags |= VERIFY_CONTEXTS;
+	qva->qva_ofvattr |= RPMVERIFY_CONTEXTS;
 	break;
 
     case RPMCLI_POPT_NOCAPS:
-	qva->qva_flags |= VERIFY_CAPS;
+	qva->qva_ofvattr |= RPMVERIFY_CAPS;
 	break;
 
 #ifdef	NOTYET
@@ -181,34 +178,45 @@ static void queryArgCallback(poptContext con,
     }
 }
 
+ /* Duplicate file attr flags from packages into command line options. */
+struct poptOption rpmQVFilePoptTable[] = {
+ { "configfiles", 'c', POPT_BIT_SET,
+	&rpmQVKArgs.qva_incattr, RPMFILE_CONFIG,
+	N_("only include configuration files"), NULL },
+ { "docfiles", 'd', POPT_BIT_SET,
+	&rpmQVKArgs.qva_incattr, RPMFILE_DOC,
+	N_("only include documentation files"), NULL },
+ { "licensefiles", 'L', POPT_BIT_SET,
+	&rpmQVKArgs.qva_incattr, RPMFILE_LICENSE,
+	N_("only include license files"), NULL },
+ { "artifactfiles", 'A', POPT_BIT_SET,
+	&rpmQVKArgs.qva_incattr, RPMFILE_ARTIFACT,
+	N_("only include artifact files"), NULL },
+ { "noghost", '\0', POPT_BIT_SET,
+	&rpmQVKArgs.qva_excattr, RPMFILE_GHOST,
+        N_("exclude %%ghost files"), NULL },
+ { "noconfig", '\0', POPT_BIT_SET,
+	&rpmQVKArgs.qva_excattr, RPMFILE_CONFIG,
+        N_("exclude %%config files"), NULL },
+ { "noartifact", '\0', POPT_BIT_SET,
+	&rpmQVKArgs.qva_excattr, RPMFILE_ARTIFACT,
+        N_("exclude %%artifact files"), NULL },
+
+   POPT_TABLEEND
+};
+
 /**
  * Query mode options.
  */
 struct poptOption rpmQueryPoptTable[] = {
-/* FIX: cast? */
- { NULL, '\0', POPT_ARG_CALLBACK | POPT_CBFLAG_INC_DATA | POPT_CBFLAG_CONTINUE, 
+ { NULL, '\0', POPT_ARG_CALLBACK | POPT_CBFLAG_INC_DATA | POPT_CBFLAG_CONTINUE,
 	queryArgCallback, 0, NULL, NULL },
- { "configfiles", 'c', 0, 0, 'c',
-	N_("list all configuration files"), NULL },
- { "docfiles", 'd', 0, 0, 'd',
-	N_("list all documentation files"), NULL },
- { "licensefiles", 'L', 0, 0, 'L',
-	N_("list all license files"), NULL },
  { "dump", '\0', 0, 0, POPT_DUMP,
 	N_("dump basic file information"), NULL },
  { NULL, 'i', POPT_ARGFLAG_DOC_HIDDEN, 0, 'i',
 	NULL, NULL },
  { "list", 'l', 0, 0, 'l',
 	N_("list files in package"), NULL },
-
- /* Duplicate file attr flags from packages into command line options. */
- { "noghost", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_fflags, RPMFILE_GHOST,
-        N_("skip %%ghost files"), NULL },
- { "noconfig", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_fflags, RPMFILE_CONFIG,
-        N_("skip %%config files"), NULL },
-
  { "qf", '\0', POPT_ARG_STRING | POPT_ARGFLAG_DOC_HIDDEN, 0, 
 	POPT_QUERYFORMAT, NULL, NULL },
  { "queryformat", '\0', POPT_ARG_STRING, 0, POPT_QUERYFORMAT,
@@ -231,25 +239,25 @@ struct poptOption rpmVerifyPoptTable[] = {
  { "nomd5", '\0', POPT_ARGFLAG_DOC_HIDDEN, NULL, RPMCLI_POPT_NOFILEDIGEST,
 	N_("don't verify digest of files"), NULL },
  { "nosize", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_SIZE,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_FILESIZE,
         N_("don't verify size of files"), NULL },
  { "nolinkto", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_LINKTO,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_LINKTO,
         N_("don't verify symlink path of files"), NULL },
  { "nouser", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_USER,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_USER,
         N_("don't verify owner of files"), NULL },
  { "nogroup", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_GROUP,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_GROUP,
         N_("don't verify group of files"), NULL },
  { "nomtime", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_MTIME,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_MTIME,
         N_("don't verify modification time of files"), NULL },
  { "nomode", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_MODE,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_MODE,
         N_("don't verify mode of files"), NULL },
  { "nordev", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
-	&rpmQVKArgs.qva_flags, VERIFY_RDEV,
+	&rpmQVKArgs.qva_ofvattr, RPMVERIFY_RDEV,
         N_("don't verify mode of files"), NULL },
 
  { "nocontexts", '\0', POPT_ARGFLAG_DOC_HIDDEN, NULL, RPMCLI_POPT_NOCONTEXTS,

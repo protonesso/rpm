@@ -52,6 +52,15 @@ static PyObject * checkSignals(PyObject * self)
     return Py_BuildValue("i", rpmsqPoll());
 }
 
+static PyObject * blockSignals(PyObject * self, PyObject *arg)
+{
+    int block;
+    if (!PyArg_Parse(arg, "p", &block)) return NULL;
+
+    return Py_BuildValue("i", rpmsqBlock(block ? SIG_BLOCK : SIG_UNBLOCK));
+}
+
+
 static PyObject * setLogFile (PyObject * self, PyObject *arg)
 {
     FILE *fp;
@@ -166,6 +175,8 @@ static PyMethodDef rpmModuleMethods[] = {
 	"signalCaught(signo) -- Returns True if signal was caught." },
     { "checkSignals", (PyCFunction) checkSignals, METH_NOARGS,
       "checkSignals() -- Check for and exit on termination signals."},
+    { "blockSignals", (PyCFunction) blockSignals, METH_O,
+      "blocksignals(True/False) -- Block/unblock signals, refcounted."},
 
     { "mergeHeaderListFromFD", (PyCFunction) rpmMergeHeadersFromFD, METH_VARARGS|METH_KEYWORDS,
 	NULL },
@@ -410,6 +421,7 @@ static int initModule(PyObject *m)
     REGISTER_ENUM(RPMFILE_LICENSE);
     REGISTER_ENUM(RPMFILE_README);
     REGISTER_ENUM(RPMFILE_PUBKEY);
+    REGISTER_ENUM(RPMFILE_ARTIFACT);
 
     REGISTER_ENUM(RPMDEP_SENSE_REQUIRES);
     REGISTER_ENUM(RPMDEP_SENSE_CONFLICTS);
@@ -513,9 +525,6 @@ static int initModule(PyObject *m)
     REGISTER_ENUM(RPMPROB_DISKNODES);
     REGISTER_ENUM(RPMPROB_OBSOLETES);
 
-    REGISTER_ENUM(VERIFY_DIGEST);
-    REGISTER_ENUM(VERIFY_SIGNATURE);
-
     REGISTER_ENUM(RPMLOG_EMERG);
     REGISTER_ENUM(RPMLOG_ALERT);
     REGISTER_ENUM(RPMLOG_CRIT);
@@ -548,6 +557,7 @@ static int initModule(PyObject *m)
 
     REGISTER_ENUM(TR_ADDED);
     REGISTER_ENUM(TR_REMOVED);
+    REGISTER_ENUM(TR_RPMDB);
 
     REGISTER_ENUM(RPMDBI_PACKAGES);
     REGISTER_ENUM(RPMDBI_LABEL);

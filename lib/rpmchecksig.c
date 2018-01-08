@@ -181,7 +181,8 @@ rpmRC rpmpkgRead(rpmKeyring keyring, rpmVSFlags flags, FD_t fd,
 	goto exit;
     }
 
-    if (hdrblobRead(fd, 1, 1, RPMTAG_HEADERSIGNATURES, &sigblob, &msg))
+    /* Read the signature header. Might not be in a contiguous region. */
+    if (hdrblobRead(fd, 1, 0, RPMTAG_HEADERSIGNATURES, &sigblob, &msg))
 	goto exit;
 
     sigset = rpmvsCreate(&sigblob, flags);
@@ -288,10 +289,7 @@ int rpmcliVerifySignatures(rpmts ts, ARGV_const_t argv)
     rpmKeyring keyring = rpmtsGetKeyring(ts, 1);
     rpmVSFlags vsflags = 0;
 
-    if (rpmcliQueryFlags & QUERY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & QUERY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
+    vsflags |= rpmcliVSFlags;
 
     while ((arg = *argv++) != NULL) {
 	FD_t fd = Fopen(arg, "r.ufdio");

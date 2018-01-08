@@ -69,18 +69,57 @@ AT_KEYWORDS([verify])
 AT_CHECK([
 RPMDB_CLEAR
 RPMDB_INIT
+tf="${RPMTEST}"/opt/foo
+rm -rf "${RPMTEST}"/opt/*
+rm -rf "${TOPDIR}"
 
-runroot rpm -U --nodeps --noscripts --ignorearch --ignoreos \
-	/data/RPMS/hello-1.0-1.i386.rpm
-mv "${RPMTEST}"/usr/share/doc/hello-1.0 "${RPMTEST}"/usr/share/doc/hello-1.0.orig
-ln -s hello-1.0.orig "${RPMTEST}"/usr/share/doc/hello-1.0
-runroot rpm -Vva --nodeps --nouser --nogroup
-rm -rf "${RPMTEST}"/usr/share/doc/
+runroot rpmbuild --quiet -bb \
+        --define "ver 1.0" \
+        --define "filetype datadir" \
+        --define "filedata README1" \
+        --define "user $(id -u -n)" \
+        --define "grp $(id -g -n)" \
+          /data/SPECS/replacetest.spec
+
+runroot rpm -U /build/RPMS/noarch/replacetest-1.0-1.noarch.rpm
+mv "${RPMTEST}"/opt/foo "${RPMTEST}"/opt/was
+ln -s was "${RPMTEST}"/opt/foo
+runroot rpm -Vv replacetest
 ],
 [0],
-[.........    /usr/local/bin/hello
-.........    /usr/share/doc/hello-1.0
-.........  d /usr/share/doc/hello-1.0/FAQ
+[.........    /opt/foo
+.........    /opt/foo/README1
+.........    /opt/goo
+.........    /opt/zoo
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([directory replaced with an invalid directory symlink])
+AT_KEYWORDS([verify])
+AT_CHECK([
+RPMDB_CLEAR
+RPMDB_INIT
+tf="${RPMTEST}"/opt/foo
+rm -rf "${RPMTEST}"/opt/*
+rm -rf "${TOPDIR}"
+
+runroot rpmbuild --quiet -bb \
+        --define "ver 1.0" \
+        --define "filetype datadir" \
+        --define "filedata README1" \
+          /data/SPECS/replacetest.spec
+
+runroot rpm -U /build/RPMS/noarch/replacetest-1.0-1.noarch.rpm
+mv "${RPMTEST}"/opt/foo "${RPMTEST}"/opt/was
+ln -s was "${RPMTEST}"/opt/foo
+runroot rpm -Vv --nouser --nogroup replacetest
+],
+[1],
+[....L....    /opt/foo
+.........    /opt/foo/README1
+.........    /opt/goo
+.........    /opt/zoo
 ],
 [])
 AT_CLEANUP
@@ -125,6 +164,62 @@ runroot rpm -Vp --nodeps --nouser --nogroup /data/RPMS/hello-1.0-1.i386.rpm
 [1],
 [.M5....T.    /usr/local/bin/hello
 missing   d /usr/share/doc/hello-1.0/FAQ
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([verify file attribute filtering])
+AT_KEYWORDS([query])
+AT_CHECK([
+runroot rpmbuild -bb --quiet \
+  /data/SPECS/vattrtest.spec
+
+runroot rpm -U /build/RPMS/noarch/vattrtest-1.0-1.noarch.rpm
+runroot_other touch /opt/vattrtest/g
+runroot_other chmod 644 /opt/vattrtest/g
+
+cmd="rpm -Vv --nouser --nogroup"
+for filter in --noconfig --noghost --noartifact -A -c -d -L; do
+    echo ${filter}
+    runroot ${cmd} ${filter} vattrtest
+done
+],
+[ignore],
+[--noconfig
+.........    /opt/vattrtest
+.........  a /opt/vattrtest/a
+.........  d /opt/vattrtest/d
+.........  g /opt/vattrtest/g
+.........  l /opt/vattrtest/l
+.........  m /opt/vattrtest/m
+.........  r /opt/vattrtest/r
+--noghost
+.........    /opt/vattrtest
+.........  a /opt/vattrtest/a
+.........  c /opt/vattrtest/c
+.........  c /opt/vattrtest/cn
+.........  d /opt/vattrtest/d
+.........  l /opt/vattrtest/l
+.........  m /opt/vattrtest/m
+.........  r /opt/vattrtest/r
+--noartifact
+.........    /opt/vattrtest
+.........  c /opt/vattrtest/c
+.........  c /opt/vattrtest/cn
+.........  d /opt/vattrtest/d
+.........  g /opt/vattrtest/g
+.........  l /opt/vattrtest/l
+.........  m /opt/vattrtest/m
+.........  r /opt/vattrtest/r
+-A
+.........  a /opt/vattrtest/a
+-c
+.........  c /opt/vattrtest/c
+.........  c /opt/vattrtest/cn
+-d
+.........  d /opt/vattrtest/d
+-L
+.........  l /opt/vattrtest/l
 ],
 [])
 AT_CLEANUP

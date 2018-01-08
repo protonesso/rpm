@@ -455,11 +455,14 @@ int rpmdsRpmlibPool(rpmstrPool pool, rpmds * dsp, const void * tblp);
 
 
 typedef enum rpmrichOp_e {
-    RPMRICHOP_SINGLE = 1,
-    RPMRICHOP_AND    = 2,
-    RPMRICHOP_OR     = 3,
-    RPMRICHOP_IF     = 4,
-    RPMRICHOP_ELSE   = 5
+    RPMRICHOP_SINGLE  = 1,
+    RPMRICHOP_AND     = 2,
+    RPMRICHOP_OR      = 3,
+    RPMRICHOP_IF      = 4,
+    RPMRICHOP_ELSE    = 5,
+    RPMRICHOP_WITH    = 6,
+    RPMRICHOP_WITHOUT = 7,
+    RPMRICHOP_UNLESS  = 8
 } rpmrichOp;
 
 typedef enum rpmrichParseType_e {
@@ -482,6 +485,17 @@ typedef rpmRC (*rpmrichParseFunction) (void *cbdata, rpmrichParseType type,
  * @return		RPMRC_OK on success
  */
 rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata);
+
+/**
+ * Parse a rich dependency string for a specific tag
+ * @param dstrp		pointer to sting, will be updated
+ * @param emsg		returns the error string, can be NULL
+ * @param cb		callback function
+ * @param cbdata	callback function data
+ * @param tagN		type of dependency
+ * @return		RPMRC_OK on success
+ */
+rpmRC rpmrichParseForTag(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata, rpmTagVal tagN);
 
 
 /**

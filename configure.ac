@@ -1,5 +1,5 @@
 AC_PREREQ(2.61)
-AC_INIT(rpm, 4.13.90, rpm-maint@lists.rpm.org)
+AC_INIT(rpm, 4.14.90, rpm-maint@lists.rpm.org)
 
 AC_CONFIG_SRCDIR([rpmqv.c])
 AC_CONFIG_HEADERS([config.h])
@@ -336,7 +336,7 @@ AC_CHECK_LIB(crypto, EVP_MD_CTX_new, [
     AC_DEFINE(HAVE_EVP_MD_CTX_NEW, 1, [Define to 1 if OpenSSL has EVP_MD_CTX_new])
     AC_SUBST(HAVE_EVP_MD_CTX_NEW, [1])
   ], [
-  AC_CHECK_LIB(crypt, EVP_MD_CTX_create, [], [
+  AC_CHECK_LIB(crypto, EVP_MD_CTX_create, [], [
       AC_MSG_ERROR([required OpenSSL library 'libcrypto' missing or too old])
   ])
 ])
@@ -600,7 +600,7 @@ AC_SUBST([WITH_DB_LIB])
 
 #=================
 # Process --enable-ndb
-AC_ARG_ENABLE([ndb], [AS_HELP_STRING([--enable-ndb],[enable the new rpm database format])],
+AC_ARG_ENABLE([ndb], [AS_HELP_STRING([--enable-ndb (EXPERIMENTAL)],[enable the new rpm database format])],
 [case "$enable_ndb" in
 yes|no) ;;
 *) AC_MSG_ERROR([invalid argument to --enable-ndb])
@@ -608,9 +608,36 @@ yes|no) ;;
 esac],
 [enable_ndb=no])
 AS_IF([test "$enable_ndb" = yes],[
-  AC_DEFINE(ENABLE_NDB, 1, [Enable new rpm database format?])
+  AC_CHECK_FUNCS([mremap],
+    [AC_DEFINE(ENABLE_NDB, 1, [Enable new rpm database format?])],
+    [AC_MSG_ERROR([mremap function required by ndb])],
+    [#include <sys/mman.h>])
 ])
 AM_CONDITIONAL([NDB], [test "$enable_ndb" = yes])
+
+#=================
+# Check for LMDB support
+AC_ARG_ENABLE([lmdb],
+              [AS_HELP_STRING([--enable-lmdb=@<:@yes/no/auto@:>@ (EXPERIMENTAL)],
+                              [build with LMDB rpm database format support (default=auto)])],
+              [enable_lmdb="$enableval"],
+              [enable_lmdb=auto])
+
+AS_IF([test "x$enable_lmdb" != "xno"], [
+  PKG_CHECK_MODULES([LMDB], [lmdb], [have_lmdb=yes], [have_lmdb=no])
+  AS_IF([test "$enable_lmdb" = "yes"], [
+    if test "$have_lmdb" = "no"; then
+      AC_MSG_ERROR([--enable-lmdb specified, but not available])
+    fi
+  ])
+])
+
+if test "x$have_lmdb" = "xyes"; then
+  AC_DEFINE([WITH_LMDB], [1], [Define if LMDB is available])
+  LMDB_REQUIRES=lmdb
+  AC_SUBST(LMDB_REQUIRES)
+fi
+AM_CONDITIONAL([LMDB], [test "x$have_lmdb" = "xyes"])
 
 AM_GNU_GETTEXT_VERSION([0.16.1])
 AM_GNU_GETTEXT([external])
@@ -777,6 +804,7 @@ AC_CHECK_FUNCS(lutimes)
 AC_CHECK_FUNCS(mergesort)
 AC_CHECK_FUNCS(getauxval)
 AC_CHECK_FUNCS(setprogname, [], [], [#include <stdlib.h>])
+AC_CHECK_FUNCS(syncfs)
 
 AC_MSG_CHECKING([whether __progname is defined])
 AC_LINK_IFELSE([AC_LANG_PROGRAM([extern const char *__progname;],
@@ -790,16 +818,9 @@ AC_REPLACE_FUNCS(stpcpy stpncpy)
 AC_CHECK_FUNCS([secure_getenv __secure_getenv])
 
 AC_CHECK_FUNCS(
-   [mkstemp getcwd basename dirname realpath setenv unsetenv regcomp lchown utimes],
+   [mkstemp getcwd basename dirname realpath setenv unsetenv regcomp lchown \
+    utimes getline],
    [], [AC_MSG_ERROR([function required by rpm])])
-
-
-# This is fairly subtle: old non-LFS compatible FTS implementations have an
-# explicit check against -D_FILE_OFFSET_BIT S == 64, which has been set
-# by our call to AC_SYS_LARGEFILE for systems that need it. So the apparent
-# existence check ends up testing for LFS compatibility as well.
-AC_CHECK_HEADERS([fts.h])
-AM_CONDITIONAL([USE_BUNDLED_FTS_KLUDGE], [test "$ac_cv_header_fts_h" = no])
 
 AC_LIBOBJ(fnmatch)
 
@@ -812,31 +833,14 @@ yes|no) ;;
 esac],
 [enable_python=no])
 
+WITH_PYTHON_SUBPACKAGE=0
 AS_IF([test "$enable_python" = yes],[
   AM_PATH_PYTHON([2.6],[
-    WITH_PYTHON_INCLUDE=`${PYTHON} -c 'from distutils.sysconfig import *; import sys; sys.stdout.write(get_python_inc())'`
-    WITH_PYTHON_SUBPACKAGE=1
-    save_CPPFLAGS="$CPPFLAGS"
-    CPPFLAGS="$CPPFLAGS -I$WITH_PYTHON_INCLUDE"
-    AC_CHECK_HEADER([Python.h],[],
-      [AC_MSG_ERROR([missing Python.h])
-      ])
-    CPPFLAGS="$save_CPPFLAGS"
-    save_LIBS="$LIBS"
-    AC_SEARCH_LIBS([Py_Main],[python${PYTHON_VERSION} python],[
-      WITH_PYTHON_LIB="$ac_res"
-    ],[AC_MSG_ERROR([missing python library])
-    ])
-    LIBS="$save_LIBS"
+    PKG_CHECK_MODULES([PYTHON], [python-${PYTHON_VERSION}], [WITH_PYTHON_SUBPACKAGE=1])
+    AC_SUBST(PYTHON_CFLAGS)
+    AC_SUBST(PYTHON_LIB)
   ])
-],[
-    WITH_PYTHON_INCLUDE=
-    WITH_PYTHON_LIB=
-    WITH_PYTHON_SUBPACKAGE=0
 ])
-
-AC_SUBST(WITH_PYTHON_INCLUDE)
-AC_SUBST(WITH_PYTHON_LIB)
 
 AM_CONDITIONAL(ENABLE_PYTHON,[test "$WITH_PYTHON_SUBPACKAGE" = 1])
 
@@ -1014,6 +1018,11 @@ AS_IF([test "$enable_plugins" != no],[
 ])
 AM_CONDITIONAL(DBUS, [test "$with_dbus" = yes])
 
+AS_IF([test "$enable_plugins" != no],[
+  AC_CHECK_FUNCS(lsetxattr, [], [], [#include <sys/xattr.h>])
+])
+AM_CONDITIONAL(IMA, [test "x$ac_cv_func_lsetxattr" = xyes])
+
 with_dmalloc=no
 AC_ARG_WITH(dmalloc, [AS_HELP_STRING([--with-dmalloc],[build with dmalloc debugging support])])
 if test "$with_dmalloc" = yes ; then
@@ -1021,8 +1030,8 @@ if test "$with_dmalloc" = yes ; then
   LIBS="$LIBS -ldmalloc"
 fi
 
-user_with_uid0=$(awk -F: '$3==0 {print $1}' /etc/passwd)
-group_with_gid0=$(awk -F: '$3==0 {print $1}' /etc/group)
+user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /etc/passwd)
+group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /etc/group)
 AC_DEFINE_UNQUOTED([UID_0_USER],["$user_with_uid0"],[Get the user name having userid 0])
 AC_DEFINE_UNQUOTED([GID_0_GROUP],["$group_with_gid0"],[Get the group name having groupid 0])
 

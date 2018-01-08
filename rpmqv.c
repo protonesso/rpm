@@ -39,6 +39,9 @@ static struct poptOption optionsTable[] = {
  { NULL, '\0', POPT_ARG_INCLUDE_TABLE, rpmQVSourcePoptTable, 0,
         N_("Query/Verify package selection options:"),
         NULL },
+ { NULL, '\0', POPT_ARG_INCLUDE_TABLE, rpmQVFilePoptTable, 0,
+        N_("Query/Verify file selection options:"),
+        NULL },
 #endif
 #ifdef IAM_RPMQ
  { NULL, '\0', POPT_ARG_INCLUDE_TABLE, rpmQueryPoptTable, 0,
@@ -329,7 +332,7 @@ int main(int argc, char *argv[])
     case MODE_ERASE:
 #endif
     case MODE_UNKNOWN:
-	if (poptPeekArg(optCon) != NULL || argc <= 1 || rpmIsVerbose()) {
+	if (poptPeekArg(optCon) != NULL || argc <= 1) {
 	    printUsage(optCon, stderr, 0);
 	    ec = argc;
 	}

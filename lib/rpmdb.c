@@ -672,11 +672,8 @@ static rpmRC rpmdbFindByFile(rpmdb db, dbiIndex dbi, const char *filespec,
 	    if (!skip) {
 		const char *dirName = dirNames[dirIndexes[num]];
 		if (fpLookupEquals(fpc, fp1, dirName, baseNames[num])) {
-		    struct dbiIndexItem_s rec = { 
-			.hdrNum = dbiIndexRecordOffset(allMatches, i),
-			.tagNum = dbiIndexRecordFileNumber(allMatches, i),
-		    };
-		    dbiIndexSetAppend(*matches, &rec, 1, 0);
+		    dbiIndexSetAppendOne(*matches, dbiIndexRecordOffset(allMatches, i),
+					 dbiIndexRecordFileNumber(allMatches, i), 0);
 		}
 	    }
 
@@ -1648,10 +1645,8 @@ int rpmdbAppendIterator(rpmdbMatchIterator mi,
     if (mi->mi_set == NULL)
 	mi->mi_set = dbiIndexSetNew(nHdrNums);
 
-    for (unsigned int i = 0; i < nHdrNums; i++) {
-	struct dbiIndexItem_s rec = { .hdrNum = hdrNums[i], .tagNum = 0 };
-	dbiIndexSetAppend(mi->mi_set, &rec, 1, 0);
-    }
+    for (unsigned int i = 0; i < nHdrNums; i++)
+	dbiIndexSetAppendOne(mi->mi_set, hdrNums[i], 0, 0);
     return 0;
 }
 
@@ -2134,7 +2129,7 @@ static rpmRC updateRichDepCB(void *cbdata, rpmrichParseType type,
 	data->nargv++;
 	_free(name);
     }
-    if (type == RPMRICH_PARSE_OP && op == RPMRICHOP_IF) {
+    if (type == RPMRICH_PARSE_OP && (op == RPMRICHOP_IF || op == RPMRICHOP_UNLESS)) {
 	/* save nargv in case of ELSE */
 	data->nargv_level[data->level - 1] = data->nargv;
 	data->neg ^= 1;
@@ -2151,7 +2146,7 @@ static rpmRC updateRichDepCB(void *cbdata, rpmrichParseType type,
 	}
 	data->neg ^= 1;
     }
-    if (type == RPMRICH_PARSE_LEAVE && op == RPMRICHOP_IF) {
+    if (type == RPMRICH_PARSE_LEAVE && (op == RPMRICHOP_IF || op == RPMRICHOP_UNLESS)) {
 	data->neg ^= 1;
     }
     return RPMRC_OK;
@@ -2535,6 +2530,10 @@ int rpmdbRebuild(const char * prefix, rpmts ts,
     }
     if (openDatabase(prefix, newdbpath, &newdb,
 		     (O_RDWR | O_CREAT), 0644, RPMDB_FLAG_REBUILD)) {
+	rc = 1;
+	goto exit;
+    }
+    if (rpmdbOpenAll(newdb)) {
 	rc = 1;
 	goto exit;
     }

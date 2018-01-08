@@ -20,6 +20,7 @@
 #define POPT_DBPATH		-995
 #define POPT_UNDEFINE		-994
 #define POPT_PIPE		-993
+#define POPT_LOAD		-992
 
 static int _debug = 0;
 
@@ -43,6 +44,8 @@ const char * rpmcliRcfile = NULL;
 const char * rpmcliRootDir = "/";
 
 rpmQueryFlags rpmcliQueryFlags;
+
+rpmVSFlags rpmcliVSFlags;
 
 extern int _rpmio_debug;
 
@@ -131,6 +134,13 @@ static void rpmcliAllArgCallback( poptContext con,
 	    free(val);
 	}
 	break;
+    case POPT_LOAD:
+	rpmcliConfigured();
+	if (rpmLoadMacroFile(NULL, arg)) {
+	    fprintf(stderr, _("failed to load macro file %s\n"), arg);
+	    exit(EXIT_FAILURE);
+	}
+	break;
     case POPT_DBPATH:
 	rpmcliConfigured();
 	rpmPushMacro(NULL, "_dbpath", NULL, arg, RMIL_CMDLINE);
@@ -158,18 +168,6 @@ static void rpmcliAllArgCallback( poptContext con,
 	rpmcliPipeOutput = xstrdup(arg);
 	break;
 	
-    case RPMCLI_POPT_NODIGEST:
-	rpmcliQueryFlags |= VERIFY_DIGEST;
-	break;
-
-    case RPMCLI_POPT_NOSIGNATURE:
-	rpmcliQueryFlags |= VERIFY_SIGNATURE;
-	break;
-
-    case RPMCLI_POPT_NOHDRCHK:
-	rpmcliQueryFlags |= VERIFY_HDRCHK;
-	break;
-
     case RPMCLI_POPT_TARGETPLATFORM:
 	rpmcliInitialized = rpmReadConfigFiles(rpmcliRcfile, arg);
 	break;
@@ -201,17 +199,23 @@ struct poptOption rpmcliAllPoptTable[] = {
  { "macros", '\0', POPT_ARG_STRING, &macrofiles, 0,
 	N_("read <FILE:...> instead of default file(s)"),
 	N_("<FILE:...>") },
+ { "load", '\0', POPT_ARG_STRING, 0, POPT_LOAD,
+	N_("load a single macro file"),
+	N_("<FILE>") },
 
  /* XXX this is a bit out of place here but kinda unavoidable... */
  { "noplugins", '\0', POPT_BIT_SET,
 	&rpmIArgs.transFlags, RPMTRANS_FLAG_NOPLUGINS,
 	N_("don't enable any plugins"), NULL },
 
- { "nodigest", '\0', 0, 0, RPMCLI_POPT_NODIGEST,
+ { "nodigest", '\0', POPT_BIT_SET,
+	&rpmcliVSFlags, _RPMVSF_NODIGESTS,
         N_("don't verify package digest(s)"), NULL },
- { "nohdrchk", '\0', POPT_ARGFLAG_DOC_HIDDEN, 0, RPMCLI_POPT_NOHDRCHK,
+ { "nohdrchk", '\0', POPT_BIT_SET|POPT_ARGFLAG_DOC_HIDDEN,
+	&rpmcliVSFlags, RPMVSF_NOHDRCHK,
         N_("don't verify database header(s) when retrieved"), NULL },
- { "nosignature", '\0', 0, 0, RPMCLI_POPT_NOSIGNATURE,
+ { "nosignature", '\0', POPT_BIT_SET,
+	&rpmcliVSFlags, _RPMVSF_NOSIGNATURES,
         N_("don't verify package signature(s)"), NULL },
 
  { "pipe", '\0', POPT_ARG_STRING|POPT_ARGFLAG_DOC_HIDDEN, 0, POPT_PIPE,

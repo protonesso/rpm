@@ -407,6 +407,7 @@ static int db_init(rpmdb rdb, const char * dbhome)
     int rc, xx;
     int retry_open = 2;
     int lockfd = -1;
+    int rdonly = ((rdb->db_mode & O_ACCMODE) == O_RDONLY);
     struct dbConfig_s * cfg = &rdb->cfg;
     /* This is our setup, thou shall not have other setups before us */
     uint32_t eflags = (DB_CREATE|DB_INIT_MPOOL|DB_INIT_CDB);
@@ -476,7 +477,7 @@ static int db_init(rpmdb rdb, const char * dbhome)
      */
     if (!(eflags & DB_PRIVATE)) {
 	lockfd = serialize_env(dbhome);
-	if (lockfd < 0) {
+	if (lockfd < 0 && rdonly) {
 	    eflags |= DB_PRIVATE;
 	    retry_open--;
 	    rpmlog(RPMLOG_DEBUG, "serialize failed, using private dbenv\n");
@@ -494,7 +495,10 @@ static int db_init(rpmdb rdb, const char * dbhome)
 	free(fstr);
 
 	rc = (dbenv->open)(dbenv, dbhome, eflags, rdb->db_perms);
-	if ((rc == EACCES || rc == EROFS) || (rc == EINVAL && errno == rc)) {
+	if (rc == EINVAL && errno == rc) {
+	    eflags |= DB_PRIVATE;
+	    retry_open--;
+	} else if (rdonly && (rc == EACCES || rc == EROFS || rc == DB_VERSION_MISMATCH)) {
 	    eflags |= DB_PRIVATE;
 	    retry_open--;
 	} else {
@@ -918,19 +922,6 @@ static int db3_dbiOpen(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flag
 
     return rc;
 }
-
-union _dbswap {
-    unsigned int ui;
-    unsigned char uc[4];
-};
-
-#define	_DBSWAP(_a) \
-\
-  { unsigned char _b, *_c = (_a).uc; \
-    _b = _c[3]; _c[3] = _c[0]; _c[0] = _b; \
-    _b = _c[2]; _c[2] = _c[1]; _c[1] = _b; \
-\
-  }
 
 /**
  * Convert retrieved data to index set.

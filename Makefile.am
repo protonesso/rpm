@@ -2,7 +2,7 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-DISTCHECK_CONFIGURE_FLAGS = --with-external-db
+DISTCHECK_CONFIGURE_FLAGS = --with-external-db --enable-python
 
 include $(top_srcdir)/rpm.am
 AM_CFLAGS = @RPMCFLAGS@
@@ -83,7 +83,6 @@ pkginclude_HEADERS += lib/rpmtd.h
 pkginclude_HEADERS += lib/rpmte.h
 pkginclude_HEADERS += lib/rpmts.h
 pkginclude_HEADERS += lib/rpmtypes.h
-pkginclude_HEADERS += lib/rpmvf.h
 pkginclude_HEADERS += lib/rpmarchive.h
 
 pkginclude_HEADERS += sign/rpmsign.h
@@ -112,45 +111,45 @@ rpm_SOURCES =		rpmqv.c debug.h system.h
 rpm_CPPFLAGS =		$(AM_CPPFLAGS) -DIAM_RPMEIU -DIAM_RPMQ -DIAM_RPMV
 rpm_LDADD =		libcliutils.la
 rpm_LDADD +=		lib/librpm.la rpmio/librpmio.la
-rpm_LDADD +=		@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpm_LDADD +=		@WITH_POPT_LIB@
 
 rpmdb_SOURCES =		rpmdb.c debug.h system.h
 rpmdb_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmdb_LDADD =		libcliutils.la
 rpmdb_LDADD +=		lib/librpm.la rpmio/librpmio.la
-rpmdb_LDADD +=		@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmdb_LDADD +=		@WITH_POPT_LIB@
 
 rpmkeys_SOURCES =	rpmkeys.c debug.h system.h
 rpmkeys_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmkeys_LDADD =		libcliutils.la
 rpmkeys_LDADD +=	lib/librpm.la rpmio/librpmio.la
-rpmkeys_LDADD +=	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmkeys_LDADD +=	@WITH_POPT_LIB@
 
 rpmsign_SOURCES =	rpmsign.c debug.h system.h
 rpmsign_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmsign_LDADD =		libcliutils.la
 rpmsign_LDADD +=	sign/librpmsign.la lib/librpm.la rpmio/librpmio.la
-rpmsign_LDADD +=	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmsign_LDADD +=	@WITH_POPT_LIB@
 
 rpmbuild_SOURCES =	rpmbuild.c debug.h system.h
 rpmbuild_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmbuild_LDADD =	libcliutils.la
 rpmbuild_LDADD +=	build/librpmbuild.la lib/librpm.la rpmio/librpmio.la
-rpmbuild_LDADD += 	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmbuild_LDADD += 	@WITH_POPT_LIB@
 
 rpmspec_SOURCES =	rpmspec.c debug.h system.h
 rpmspec_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmspec_LDADD =		libcliutils.la
 rpmspec_LDADD +=	build/librpmbuild.la lib/librpm.la rpmio/librpmio.la
-rpmspec_LDADD +=	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmspec_LDADD +=	@WITH_POPT_LIB@
 
 rpm2cpio_SOURCES =	rpm2cpio.c debug.h system.h
 rpm2cpio_LDADD =	lib/librpm.la rpmio/librpmio.la
-rpm2cpio_LDADD +=	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpm2cpio_LDADD +=	@WITH_POPT_LIB@
 
 rpm2archive_SOURCES =	rpm2archive.c debug.h system.h
 rpm2archive_LDADD =	lib/librpm.la rpmio/librpmio.la
-rpm2archive_LDADD +=	@WITH_BEECRYPT_LIB@ @WITH_NSS_LIB@ @WITH_OPENSSL_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@ @WITH_ARCHIVE_LIB@
+rpm2archive_LDADD +=	@WITH_POPT_LIB@ @WITH_ARCHIVE_LIB@
 
 
 if LIBELF
@@ -166,7 +165,9 @@ if HAVE_LIBDW_STRTAB
 debugedit_LDADD +=	@WITH_LIBDW_LIB@
 else
 debugedit_LDADD +=	@WITH_LIBDW_LIB@ -lebl
-endif
+endif # HAVE_LIBDW_STRTAB
+endif # LIBDW
+endif # LIBDWARF
 rpmlibexec_PROGRAMS +=	elfdeps
 elfdeps_SOURCES =	tools/elfdeps.c
 elfdeps_LDADD =		rpmio/librpmio.la
@@ -175,9 +176,7 @@ elfdeps_LDADD +=	@WITH_LIBELF_LIB@ @WITH_POPT_LIB@
 rpmlibexec_PROGRAMS +=	sepdebugcrcfix
 sepdebugcrcfix_SOURCES = tools/sepdebugcrcfix.c
 sepdebugcrcfix_LDADD =	@WITH_LIBELF_LIB@
-endif
-endif
-endif
+endif #LIBELF
 
 rpmlibexec_PROGRAMS +=	rpmdeps
 rpmdeps_SOURCES =	tools/rpmdeps.c
@@ -252,6 +251,7 @@ install-data-local:
 			rpmrc platform macros \
 			$(RPMCANONVENDOR) $(RPMCANONOS) $(RPMCANONGNU)
 	@$(MKDIR_P) $(DESTDIR)$(localstatedir)/tmp
+	@$(MKDIR_P) $(DESTDIR)$(rpmconfigdir)/macros.d
 
 # XXX to appease distcheck we need to remove "stuff" here...
 uninstall-local:
@@ -259,6 +259,7 @@ uninstall-local:
 	@rm -f $(DESTDIR)$(bindir)/rpmverify
 	@rm -rf $(DESTDIR)$(rpmconfigdir)/platform/
 	@rm -f $(DESTDIR)$(rpmconfigdir)/macros
+	@rm -rf $(DESTDIR)$(rpmconfigdir)/macros.d
 
 MAINTAINERCLEANFILES = ChangeLog
 

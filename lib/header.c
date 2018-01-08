@@ -1838,7 +1838,7 @@ static rpmRC hdrblobVerifyRegion(rpmTagVal regionTag, int exact_size,
     /* In package files region size is expected to match header size. */
     if (exact_size && !(blob->il == blob->ril && blob->dl == blob->rdl)) {
 	rasprintf(buf,
-		_("region %d: tag number mismatch %d ril %d dl %d rdl %d\n"),
+		_("region %d: tag number mismatch il %d ril %d dl %d rdl %d\n"),
 		regionTag, blob->il, blob->ril, blob->dl, blob->rdl);
 	goto exit;
     }
@@ -1867,7 +1867,7 @@ rpmRC hdrblobRead(FD_t fd, int magic, int exact_size, rpmTagVal regionTag, hdrbl
 
     if (regionTag == RPMTAG_HEADERSIGNATURES) {
 	il_max = 32;
-	dl_max = 8192;
+	dl_max = 64 * 1024;
     }
 
     memset(block, 0, sizeof(block));

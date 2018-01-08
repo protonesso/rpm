@@ -109,8 +109,6 @@ static char *getMntPoint(const char *dirName, dev_t dev)
 
 static int rpmtsInitDSI(const rpmts ts)
 {
-    if (rpmtsFilterFlags(ts) & RPMPROB_FILTER_DISKSPACE)
-	return 0;
     ts->dsi = _free(ts->dsi);
     ts->dsi = xcalloc(1, sizeof(*ts->dsi));
     return 0;
@@ -658,8 +656,10 @@ assert(otherFi != NULL);
 	    }
 	    if (XFA_SKIPPING(rpmfsGetAction(fs, i)))
 		break;
-	    if (rpmfilesFState(fi, i) != RPMFILE_STATE_NORMAL)
+	    if (rpmfilesFState(fi, i) != RPMFILE_STATE_NORMAL) {
+		rpmfsSetAction(fs, i, FA_SKIP);
 		break;
+	    }
 		
 	    /* Pre-existing modified config files need to be saved. */
 	    if (rpmfilesConfigConflict(fi, i)) {
@@ -669,6 +669,8 @@ assert(otherFi != NULL);
 	
 	    /* Otherwise, we can just erase. */
 	    rpmfsSetAction(fs, i, FA_ERASE);
+	    break;
+	default:
 	    break;
 	}
 	rpmfilesFree(otherFi);
@@ -1130,6 +1132,8 @@ void checkInstalledFiles(rpmts ts, uint64_t fileCount, fingerPrintCache fpc)
 			    rpmfsSetAction(fs, recs[j].fileno, FA_SKIP);
 		    }
 		    break;
+		default:
+		    break;
 		}
 		rpmfilesFree(fi);
 	    }
@@ -1271,6 +1275,7 @@ static int rpmtsSetup(rpmts ts, rpmprobFilterFlags ignoreSet)
 
 static int rpmtsFinish(rpmts ts)
 {
+    rpmtsFreeDSI(ts);
     return rpmChrootSet(NULL);
 }
 
@@ -1346,7 +1351,8 @@ static int rpmtsPrepare(rpmts ts)
 			       hsize, 0, 0, FA_CREATE);
 	    }
 
-	    rpmtsCheckDSIProblems(ts, p);
+	    if (!(rpmtsFilterFlags(ts) & RPMPROB_FILTER_DISKSPACE))
+		rpmtsCheckDSIProblems(ts, p);
 	}
 	(void) rpmswExit(rpmtsOp(ts, RPMTS_OP_FINGERPRINT), 0);
 	rpmfilesFree(files);
@@ -1369,7 +1375,6 @@ static int rpmtsPrepare(rpmts ts)
 
 exit:
     fpCacheFree(fpc);
-    rpmtsFreeDSI(ts);
     return rc;
 }
 
@@ -1446,9 +1451,10 @@ rpmRC rpmtsSetupTransactionPlugins(rpmts ts)
  * @param arg2		ditto, but for the target package
  * @return		0 on success
  */
-rpmRC runScript(rpmts ts, rpmte te, ARGV_const_t prefixes,
+rpmRC runScript(rpmts ts, rpmte te, Header h, ARGV_const_t prefixes,
 		       rpmScript script, int arg1, int arg2)
 {
+    rpmte xte = te;
     rpmRC stoprc, rc = RPMRC_OK;
     rpmTagVal stag = rpmScriptTag(script);
     FD_t sfd = NULL;
@@ -1456,6 +1462,12 @@ rpmRC runScript(rpmts ts, rpmte te, ARGV_const_t prefixes,
 		     stag != RPMTAG_PREUN &&
 		     stag != RPMTAG_PRETRANS &&
 		     stag != RPMTAG_VERIFYSCRIPT);
+
+    /* Create a temporary transaction element for triggers from rpmdb */
+    if (te == NULL) {
+	te = rpmteNew(ts, h, TR_RPMDB, NULL, NULL);
+	rpmteSetHeader(te, h);
+    }
 
     sfd = rpmtsNotify(ts, te, RPMCALLBACK_SCRIPT_START, stag, 0);
     if (sfd == NULL)
@@ -1482,12 +1494,36 @@ rpmRC runScript(rpmts ts, rpmte te, ARGV_const_t prefixes,
 	rpmtsNotify(ts, te, RPMCALLBACK_SCRIPT_ERROR, stag, rc);
     }
 
+    if (te != xte)
+	rpmteFree(te);
+
     return rc;
+}
+
+static void rpmtsSync(rpmts ts)
+{
+    if (rpmChrootDone())
+	return;
+
+#if HAVE_SYNCFS
+    for (rpmDiskSpaceInfo dsi = ts->dsi; dsi->bsize; dsi++) {
+	int fd = open(dsi->mntPoint, O_RDONLY);
+	if (fd != -1) {
+	    rpmlog(RPMLOG_DEBUG, "syncing fs %s\n", dsi->mntPoint);
+	    syncfs(fd);
+	    close(fd);
+	}
+    }
+#else
+    rpmlog(RPMLOG_DEBUG, "syncing all filesystems\n");
+    sync();
+#endif
 }
 
 int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 {
     int rc = -1; /* assume failure */
+    int nfailed = -1;
     tsMembers tsmem = rpmtsMembers(ts);
     rpmtxn txn = NULL;
     rpmps tsprobs = NULL;
@@ -1525,18 +1561,10 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 	goto exit;
     }
 
-    if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_BUILD_PROBS|RPMTRANS_FLAG_NOPRETRANS|
-	RPMTRANS_FLAG_NOTRIGGERUN) || rpmpsNumProblems(tsprobs))) {
-
-	/* Run file triggers in this package other package(s) set off. */
-	runFileTriggers(ts, NULL, RPMSENSE_TRIGGERUN,
-			RPMSCRIPT_TRANSFILETRIGGER, 0);
-	/* Run file triggers in other package(s) this package sets off. */
-	runTransScripts(ts, PKG_TRANSFILETRIGGERUN);
-    }
-
-    /* Run pre-transaction scripts, but only if there are no known
-     * problems up to this point and not disabled otherwise. */
+    /* Run %pretrans scripts, but only if there are no known problems up to
+     * this point and not disabled otherwise. This is evil as it runs before
+     * fingerprinting and problem checking and is best avoided.
+     */
     if (!((rpmtsFlags(ts) & (RPMTRANS_FLAG_BUILD_PROBS|RPMTRANS_FLAG_NOPRETRANS))
      	  || (rpmpsNumProblems(tsprobs)))) {
 	rpmlog(RPMLOG_DEBUG, "running pre-transaction scripts\n");
@@ -1569,17 +1597,25 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
     if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_TEST|RPMTRANS_FLAG_BUILD_PROBS)))
 	tsmem->pool = rpmstrPoolFree(tsmem->pool);
 
+    /* Run %transfiletriggerun scripts unless disabled */
+    if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_BUILD_PROBS|RPMTRANS_FLAG_NOPRETRANS|
+	RPMTRANS_FLAG_NOTRIGGERUN))) {
 
-    /* Actually install and remove packages, get final exit code */
-    rc = rpmtsProcess(ts) ? -1 : 0;
+	runFileTriggers(ts, NULL, RPMSENSE_TRIGGERUN,
+			RPMSCRIPT_TRANSFILETRIGGER, 0);
+	runTransScripts(ts, PKG_TRANSFILETRIGGERUN);
+    }
 
-    /* Run post-transaction scripts unless disabled */
+    /* Actually install and remove packages */
+    nfailed = rpmtsProcess(ts) ? -1 : 0;
+
+    /* Run %posttrans scripts unless disabled */
     if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_NOPOSTTRANS))) {
 	rpmlog(RPMLOG_DEBUG, "running post-transaction scripts\n");
 	runTransScripts(ts, PKG_POSTTRANS);
     }
 
-    /* Run file triggers in other package(s) this package sets off. */
+    /* Run %transfiletriggerpostun scripts unless disabled */
     if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_NOPOSTTRANS|RPMTRANS_FLAG_NOTRIGGERIN))) {
 	runFileTriggers(ts, NULL, RPMSENSE_TRIGGERIN, RPMSCRIPT_TRANSFILETRIGGER, 0);
     }
@@ -1587,16 +1623,22 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 	runPostUnTransFileTrigs(ts);
     }
 
-    /* Run file triggers in this package other package(s) set off. */
+    /* Run %transfiletriggerin scripts unless disabled */
     if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_NOPOSTTRANS|RPMTRANS_FLAG_NOTRIGGERIN))) {
 	runTransScripts(ts, PKG_TRANSFILETRIGGERIN);
     }
+    /* Final exit code */
+    rc = nfailed ? -1 : 0;
+
 exit:
     /* Run post transaction hook for all plugins */
     if (TsmPreDone) /* If TsmPre hook has been called, call the TsmPost hook */
 	rpmpluginsCallTsmPost(rpmtsPlugins(ts), ts, rc);
 
     /* Finish up... */
+    if (!(rpmtsFlags(ts) & RPMTRANS_FLAG_TEST) && nfailed > 0) {
+	rpmtsSync(ts);
+    }
     (void) umask(oldmask);
     (void) rpmtsFinish(ts);
     rpmpsFree(tsprobs);

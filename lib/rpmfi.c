@@ -480,10 +480,16 @@ int rpmfiFindOFN(rpmfi fi, const char * fn)
     return ix;
 }
 
-static int cmpPfx(rpmfiles files, int ix, const char *pfx)
+/*
+ * Dirnames are not sorted when separated from basenames, we need to assemble
+ * the whole path for search (binary or otherwise) purposes.
+ */
+static int cmpPfx(rpmfiles files, int ix, const char *pfx, size_t plen)
 {
-    int plen = strlen(pfx);
-    return strncmp(pfx, rpmfilesDN(files, rpmfilesDI(files, ix)), plen);
+    char *fn = rpmfilesFN(files, ix);
+    int rc = strncmp(pfx, fn, plen);
+    free(fn);
+    return rc;
 }
 
 rpmfileAttrs rpmfilesFFlags(rpmfiles fi, int ix)
@@ -775,28 +781,17 @@ int rpmfilesStat(rpmfiles fi, int ix, int flags, struct stat *sb)
 	int warn = flags & 0x1;
 	const char *user = rpmfilesFUser(fi, ix);
 	const char *group = rpmfilesFGroup(fi, ix);
-	const int * hardlinks = NULL;
-	uint32_t nlinks = rpmfilesFLinks(fi, ix, &hardlinks);
 
 	memset(sb, 0, sizeof(*sb));
-	sb->st_nlink = nlinks;
+	sb->st_nlink = rpmfilesFLinks(fi, ix, NULL);
 	sb->st_ino = rpmfilesFInode(fi, ix);
 	sb->st_rdev = rpmfilesFRdev(fi, ix);
 	sb->st_mode = rpmfilesFMode(fi, ix);
 	sb->st_mtime = rpmfilesFMtime(fi, ix);
 
 	/* Only regular files and symlinks have a size */
-	if (S_ISREG(sb->st_mode)) {
-	    /* Content and thus size comes with last hardlink */
-	    if (!(nlinks > 1 && hardlinks[nlinks-1] != ix))
-		sb->st_size = rpmfilesFSize(fi, ix);
-	} else if (S_ISLNK(sb->st_mode)) {
-	    /*
-	     * Normally rpmfilesFSize() is correct for symlinks too, this is
-	     * only needed for glob()'ed links from fakechroot environment.
-	     */
-	    sb->st_size = strlen(rpmfilesFLink(fi, ix));
-	}
+	if (S_ISREG(sb->st_mode) || S_ISLNK(sb->st_mode))
+	    sb->st_size = rpmfilesFSize(fi, ix);
 
 	if (user && rpmugUid(user, &sb->st_uid)) {
 	    if (warn)
@@ -1712,26 +1707,27 @@ rpmfi rpmfilesFindPrefix(rpmfiles fi, const char *pfx)
     if (!fi || !pfx)
 	return NULL;
 
+    size_t plen = strlen(pfx);
     l = 0;
     u = rpmfilesFC(fi);
     while (l < u) {
 	c = (l + u) / 2;
 
-	comparison = cmpPfx(fi, c, pfx);
+	comparison = cmpPfx(fi, c, pfx, plen);
 
 	if (comparison < 0)
 	    u = c;
 	else if (comparison > 0)
 	    l = c + 1;
 	else {
-	    if (cmpPfx(fi, l, pfx))
+	    if (cmpPfx(fi, l, pfx, plen))
 		l = c;
-	    while (l > 0 && !cmpPfx(fi, l - 1, pfx))
+	    while (l > 0 && !cmpPfx(fi, l - 1, pfx, plen))
 		l--;
-	    if ( u >= rpmfilesFC(fi) || cmpPfx(fi, u, pfx))
+	    if ( u >= rpmfilesFC(fi) || cmpPfx(fi, u, pfx, plen))
 		u = c;
 	    while (++u < rpmfilesFC(fi)) {
-		if (cmpPfx(fi, u, pfx))
+		if (cmpPfx(fi, u, pfx, plen))
 		    break;
 	    }
 	    break;
@@ -1815,7 +1811,7 @@ void rpmfilesFpLookup(rpmfiles fi, fingerPrintCache fpc)
  */
 
 #define RPMFI_ITERFUNC(TYPE, NAME, IXV) \
-    TYPE rpmfi ## NAME(rpmfi fi) { return rpmfiles ## NAME(fi->files, fi ? fi->IXV : -1); }
+    TYPE rpmfi ## NAME(rpmfi fi) { return rpmfiles ## NAME(fi ? fi->files : NULL, fi ? fi->IXV : -1); }
 
 RPMFI_ITERFUNC(rpmsid, BNId, i)
 RPMFI_ITERFUNC(rpmsid, DNId, j)
@@ -1881,7 +1877,17 @@ uint32_t rpmfiFDepends(rpmfi fi, const uint32_t ** fddictp)
 
 int rpmfiStat(rpmfi fi, int flags, struct stat *sb)
 {
-    return rpmfilesStat(fi->files, fi->i, flags, sb);
+    int rc = -1;
+    if (fi != NULL) {
+	rc = rpmfilesStat(fi->files, fi->i, flags, sb);
+	/* In archives, hardlinked files are empty except for the last one */
+	if (rc == 0 && fi->archive && sb->st_nlink > 1) {
+	    const int *links = NULL;
+	    if (rpmfiFLinks(fi, &links) && links[sb->st_nlink-1] != fi->i)
+		sb->st_size = 0;
+	}
+    }
+    return rc;
 }
 
 int rpmfiCompare(const rpmfi afi, const rpmfi bfi)

@@ -28,16 +28,7 @@
 #include <rpm/rpmbase64.h>
 
 #include "rpmio/rpmio_internal.h"	/* XXX rpmioSlurp */
-
-#ifdef HAVE_FTS_H
-# include <fts.h>
-# define Fts_open fts_open
-# define Fts_read fts_read
-# define Fts_close fts_close
-#else
-# include "misc/rpmfts.h"
-#endif
-
+#include "misc/rpmfts.h"
 #include "lib/rpmfi_internal.h"	/* XXX fi->apath */
 #include "lib/rpmug.h"
 #include "build/rpmbuild_internal.h"
@@ -866,6 +857,7 @@ static VFA_t const virtualAttrs[] = {
     { "%license",	RPMFILE_LICENSE },
     { "%pubkey",	RPMFILE_PUBKEY },
     { "%missingok",	RPMFILE_MISSINGOK },
+    { "%artifact",	RPMFILE_ARTIFACT },
     { NULL, 0 }
 };
 
@@ -1637,13 +1629,18 @@ exit:
     return rc;
 }
 
-/* add a directory to the file list */
-static void argvAddDir(ARGV_t *filesp, const char *dir)
+/* add a file with possible virtual attributes to the file list */
+static void argvAddAttr(ARGV_t *filesp, rpmfileAttrs attrs, const char *path)
 {
     char *line = NULL;
-    rasprintf(&line, "%%dir %s", dir);
+
+    for (VFA_t *vfa = virtualAttrs; vfa->attribute != NULL; vfa++) {
+	if (vfa->flag & attrs)
+	    line = rstrscat(&line, vfa->attribute, " ", NULL);
+    }
+    line = rstrscat(&line, path, NULL);
     argvAdd(filesp, line);
-    _free(line);
+    free(line);
 }
 
 #if HAVE_LIBDW
@@ -1702,7 +1699,7 @@ static int addNewIDSymlink(ARGV_t *files,
 	rpmlog(RPMLOG_ERR, "%s: %s -> %s: %m\n",
 	       linkerr, linkpath, targetpath);
     } else {
-	rc = argvAdd(files, linkpath);
+	argvAddAttr(files, RPMFILE_ARTIFACT, linkpath);
     }
 
     if (nr > 0) {
@@ -1903,7 +1900,7 @@ static int generateBuildIDs(FileList fl, ARGV_t *files)
 		if ((rc = rpmioMkpath(mainiddir, 0755, -1, -1)) != 0) {
 		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, mainiddir);
 		} else {
-		    argvAddDir(files, mainiddir);
+		    argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, mainiddir);
 		}
 	    }
 
@@ -1911,7 +1908,7 @@ static int generateBuildIDs(FileList fl, ARGV_t *files)
 		if ((rc = rpmioMkpath(debugiddir, 0755, -1, -1)) != 0) {
 		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, debugiddir);
 		} else {
-		    argvAddDir(files, debugiddir);
+		    argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, debugiddir);
 		}
 	    }
 	}
@@ -1951,7 +1948,7 @@ static int generateBuildIDs(FileList fl, ARGV_t *files)
 		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, buildidsubdir);
 		} else {
 		    if (addsubdir)
-		       argvAddDir (files, buildidsubdir);
+		       argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, buildidsubdir);
 		    if (rc == 0) {
 			char *linkpattern, *targetpattern;
 			char *linkpath, *targetpath;
@@ -2782,6 +2779,9 @@ static void patchDebugPackageString(Package dbg, rpmTag tag, Package pkg, Packag
     _free(newsubst);
 }
 
+/* Early prototype for use in filterDebuginfoPackage. */
+static void addPackageDeps(Package from, Package to, enum rpmTag_e tag);
+
 /* create a new debuginfo subpackage for package pkg from the
  * main debuginfo package */
 static Package cloneDebuginfoPackage(rpmSpec spec, Package pkg, Package maindbg)
@@ -2814,7 +2814,8 @@ static Package cloneDebuginfoPackage(rpmSpec spec, Package pkg, Package maindbg)
 /* collect the debug files for package pkg and put them into
  * a (possibly new) debuginfo subpackage */
 static void filterDebuginfoPackage(rpmSpec spec, Package pkg,
-		Package maindbg, char *buildroot, char *uniquearch)
+				   Package maindbg, Package dbgsrc,
+				   char *buildroot, char *uniquearch)
 {
     rpmfi fi;
     ARGV_t files = NULL;
@@ -2864,7 +2865,7 @@ static void filterDebuginfoPackage(rpmSpec spec, Package pkg,
 	    if (!files) {
 		char *attr = mkattr();
 		argvAdd(&files, attr);
-		argvAddDir(&files, DEBUG_LIB_DIR);
+		argvAddAttr(&files, RPMFILE_DIR, DEBUG_LIB_DIR);
 		free(attr);
 	    }
 
@@ -2909,7 +2910,7 @@ static void filterDebuginfoPackage(rpmSpec spec, Package pkg,
 	argvSort(dirs, NULL);
 	for (i = 0; dirs[i]; i++) {
 	    if (!i || strcmp(dirs[i], dirs[i - 1]) != 0)
-		argvAddDir(&files, dirs[i]);
+		argvAddAttr(&files, RPMFILE_DIR, dirs[i]);
 	}
 	dirs = argvFree(dirs);
     }
@@ -2923,6 +2924,9 @@ static void filterDebuginfoPackage(rpmSpec spec, Package pkg,
 	else {
 	    Package dbg = cloneDebuginfoPackage(spec, pkg, maindbg);
 	    dbg->fileList = files;
+	    /* Recommend the debugsource package (or the main debuginfo).  */
+	    addPackageDeps(dbg, dbgsrc ? dbgsrc : maindbg,
+			   RPMTAG_RECOMMENDNAME);
 	}
     }
 }
@@ -2940,10 +2944,10 @@ static int addDebugDwz(Package pkg, char *buildroot)
 	if (!pkg->fileList) {
 	    char *attr = mkattr();
 	    argvAdd(&pkg->fileList, attr);
-	    argvAddDir(&pkg->fileList, DEBUG_LIB_DIR);
+	    argvAddAttr(&pkg->fileList, RPMFILE_DIR|RPMFILE_ARTIFACT, DEBUG_LIB_DIR);
 	    free(attr);
 	}
-	argvAdd(&pkg->fileList, DEBUG_DWZ_DIR);
+	argvAddAttr(&pkg->fileList, RPMFILE_ARTIFACT, DEBUG_DWZ_DIR);
 	ret = 1;
     }
     path = _free(path);
@@ -2985,25 +2989,36 @@ static int addDebugSrc(Package pkg, char *buildroot)
     return ret;
 }
 
+/* find the debugsource package, if it has been created.
+ * We do this simply by searching for a package with the right name. */
+static Package findDebugsourcePackage(rpmSpec spec)
+{
+    Package pkg = NULL;
+    if (lookupPackage(spec, "debugsource", PART_SUBNAME|PART_QUIET, &pkg))
+	return NULL;
+    return pkg && pkg->fileList ? pkg : NULL;
+}
+
 /* find the main debuginfo package. We do this simply by
  * searching for a package with the right name. */
 static Package findDebuginfoPackage(rpmSpec spec)
 {
     Package pkg = NULL;
-    if (lookupPackage(spec, "debuginfo", PART_SUBNAME, &pkg))
+    if (lookupPackage(spec, "debuginfo", PART_SUBNAME|PART_QUIET, &pkg))
 	return NULL;
     return pkg && pkg->fileList ? pkg : NULL;
 }
 
-/* add a requires for package "to" into package "from". */
-static void addPackageRequires(Package from, Package to)
+/* add a dependency (e.g. RPMTAG_REQUIRENAME or RPMTAG_RECOMMENDNAME)
+   for package "to" into package "from". */
+static void addPackageDeps(Package from, Package to, enum rpmTag_e tag)
 {
     const char *name;
     char *evr, *isaprov;
     name = headerGetString(to->header, RPMTAG_NAME);
     evr = headerGetAsString(to->header, RPMTAG_EVR);
     isaprov = rpmExpand(name, "%{?_isa}", NULL);
-    addReqProv(from, RPMTAG_REQUIRENAME, isaprov, evr, RPMSENSE_EQUAL, 0);
+    addReqProv(from, tag, isaprov, evr, RPMSENSE_EQUAL, 0);
     free(isaprov);
     free(evr);
 }
@@ -3017,6 +3032,9 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
     char *uniquearch = NULL;
     Package maindbg = NULL;		/* the (existing) main debuginfo package */
     Package deplink = NULL;		/* create requires to this package */
+    /* The debugsource package, if it exists, that the debuginfo package(s)
+       should Recommend.  */
+    Package dbgsrcpkg = findDebugsourcePackage(spec);
     
 #if HAVE_LIBDW
     elf_version (EV_CURRENT);
@@ -3047,6 +3065,12 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
 	    if (rpmExpandNumeric("%{?_unique_debug_names}"))
 		uniquearch = rpmExpand("-%{VERSION}-%{RELEASE}.%{_arch}", NULL);
 	}
+    } else if (dbgsrcpkg != NULL) {
+	/* We have a debugsource package, but no debuginfo subpackages.
+	   The main debuginfo package should recommend the debugsource one. */
+	Package dbgpkg = findDebuginfoPackage(spec);
+	if (dbgpkg)
+	    addPackageDeps(dbgpkg, dbgsrcpkg, RPMTAG_RECOMMENDNAME);
     }
 
     for (pkg = spec->packages; pkg != NULL; pkg = pkg->next) {
@@ -3064,6 +3088,8 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
 		deplink = extradbg;
 	    if (addDebugSrc(extradbg, buildroot))
 		deplink = extradbg;
+	    if (dbgsrcpkg != NULL)
+		addPackageDeps(extradbg, dbgsrcpkg, RPMTAG_RECOMMENDNAME);
 	    maindbg = NULL;	/* all normal packages processed */
 	}
 
@@ -3080,9 +3106,10 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
 	    goto exit;
 
 	if (maindbg)
-	    filterDebuginfoPackage(spec, pkg, maindbg, buildroot, uniquearch);
+	    filterDebuginfoPackage(spec, pkg, maindbg, dbgsrcpkg,
+				   buildroot, uniquearch);
 	else if (deplink && pkg != deplink)
-	    addPackageRequires(pkg, deplink);
+	    addPackageDeps(pkg, deplink, RPMTAG_REQUIRENAME);
 
         if ((rc = rpmfcGenerateDepends(spec, pkg)) != RPMRC_OK)
 	    goto exit;

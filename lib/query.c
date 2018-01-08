@@ -109,6 +109,10 @@ int showQueryPackage(QVA_t qva, rpmts ts, Header h)
 	}
     }
 
+    /* Inclusion flags traditionally imply list mode */
+    if (qva->qva_incattr)
+	qva->qva_flags |= QUERY_FOR_LIST;
+
     if (!(qva->qva_flags & QUERY_FOR_LIST))
 	goto exit;
 
@@ -135,20 +139,12 @@ int showQueryPackage(QVA_t qva, rpmts ts, Header h)
 	const char *flink = rpmfiFLink(fi);
 	char *buf = NULL;
 
-	/* If querying only docs, skip non-doc files. */
-	if ((qva->qva_flags & QUERY_FOR_DOCS) && !(fflags & RPMFILE_DOC))
-	    continue;
-
-	/* If querying only configs, skip non-config files. */
-	if ((qva->qva_flags & QUERY_FOR_CONFIG) && !(fflags & RPMFILE_CONFIG))
-	    continue;
-
-	/* If querying only licenses, skip non-license files. */
-	if ((qva->qva_flags & QUERY_FOR_LICENSE) && !(fflags & RPMFILE_LICENSE))
+	/* If filtering by inclusion, skip non-matching (eg --configfiles) */
+	if (qva->qva_incattr && !(fflags & qva->qva_incattr))
 	    continue;
 
 	/* Skip on attributes (eg from --noghost) */
-	if (fflags & qva->qva_fflags)
+	if (fflags & qva->qva_excattr)
 	    continue;
 
 	if (qva->qva_flags & QUERY_FOR_STATE) {
@@ -585,7 +581,8 @@ int rpmcliQuery(rpmts ts, QVA_t qva, char * const * argv)
 	qva->qva_showPackage = showQueryPackage;
 
     /* If --queryformat unspecified, then set default now. */
-    if (!(qva->qva_flags & _QUERY_FOR_BITS) && qva->qva_queryFormat == NULL) {
+    if (!(qva->qva_flags & _QUERY_FOR_BITS) && !(qva->qva_incattr) &&
+					    qva->qva_queryFormat == NULL) {
 	char * fmt = rpmExpand("%{?_query_all_fmt}\n", NULL);
 	if (fmt == NULL || strlen(fmt) <= 1) {
 	    free(fmt);
@@ -595,12 +592,7 @@ int rpmcliQuery(rpmts ts, QVA_t qva, char * const * argv)
     }
 
     vsflags = rpmExpandNumeric("%{?_vsflags_query}");
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
 
     ovsflags = rpmtsSetVSFlags(ts, vsflags);
     ec = rpmcliArgIter(ts, qva, argv);

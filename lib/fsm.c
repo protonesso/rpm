@@ -14,6 +14,7 @@
 #include <rpm/rpmte.h>
 #include <rpm/rpmts.h>
 #include <rpm/rpmlog.h>
+#include <rpm/rpmmacro.h>
 
 #include "rpmio/rpmio_internal.h"	/* fdInit/FiniDigest */
 #include "lib/fsm.h"
@@ -206,40 +207,69 @@ static int fsmSetFCaps(const char *path, const char *captxt)
     return rc;
 }
 
-/** \ingroup payload
- * Create file from payload stream.
- * @return		0 on success
- */
-static int expandRegular(rpmfi fi, const char *dest, rpmpsm psm, int nodigest, int nocontent)
+static void wfd_close(FD_t *wfdp)
 {
-    FD_t wfd = NULL;
-    int rc = 0;
+    if (wfdp && *wfdp) {
+	int myerrno = errno;
+	static int oneshot = 0;
+	static int flush_io = 0;
+	if (!oneshot) {
+	    flush_io = rpmExpandNumeric("%{?_flush_io}");
+	    oneshot = 1;
+	}
+	if (flush_io) {
+	    int fdno = Fileno(*wfdp);
+	    fsync(fdno);
+	}
+	Fclose(*wfdp);
+	*wfdp = NULL;
+	errno = myerrno;
+    }
+}
 
+static int wfd_open(FD_t *wfdp, const char *dest)
+{
+    int rc = 0;
     /* Create the file with 0200 permissions (write by owner). */
     {
 	mode_t old_umask = umask(0577);
-	wfd = Fopen(dest, "w.ufdio");
+	*wfdp = Fopen(dest, "wx.ufdio");
 	umask(old_umask);
     }
-    if (Ferror(wfd)) {
+    if (Ferror(*wfdp)) {
 	rc = RPMERR_OPEN_FAILED;
 	goto exit;
     }
 
-    if (!nocontent)
-	rc = rpmfiArchiveReadToFilePsm(fi, wfd, nodigest, psm);
+    return 0;
+
 exit:
-    if (wfd) {
-	int myerrno = errno;
-	Fclose(wfd);
-	errno = myerrno;
-    }
+    wfd_close(wfdp);
+    return rc;
+}
+
+/** \ingroup payload
+ * Create file from payload stream.
+ * @return		0 on success
+ */
+static int expandRegular(rpmfi fi, const char *dest, rpmpsm psm, int nodigest)
+{
+    FD_t wfd = NULL;
+    int rc;
+
+    rc = wfd_open(&wfd, dest);
+    if (rc != 0)
+        goto exit;
+
+    rc = rpmfiArchiveReadToFilePsm(fi, wfd, nodigest, psm);
+    wfd_close(&wfd);
+exit:
     return rc;
 }
 
 static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
 		     rpmpsm psm, int nodigest, int *setmeta,
-		     int * firsthardlink)
+		     int * firsthardlink, FD_t *firstlinkfile)
 {
     int rc = 0;
     int numHardlinks = rpmfiFNlink(fi);
@@ -248,7 +278,7 @@ static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
 	/* Create first hardlinked file empty */
 	if (*firsthardlink < 0) {
 	    *firsthardlink = rpmfiFX(fi);
-	    rc = expandRegular(fi, dest, psm, nodigest, 1);
+	    rc = wfd_open(firstlinkfile, dest);
 	} else {
 	    /* Create hard links for others */
 	    char *fn = rpmfilesFN(files, *firsthardlink);
@@ -263,10 +293,11 @@ static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
        existing) file with content */
     if (numHardlinks<=1) {
 	if (!rc)
-	    rc = expandRegular(fi, dest, psm, nodigest, 0);
+	    rc = expandRegular(fi, dest, psm, nodigest);
     } else if (rpmfiArchiveHasContent(fi)) {
 	if (!rc)
-	    rc = expandRegular(fi, dest, psm, nodigest, 0);
+	    rc = rpmfiArchiveReadToFilePsm(fi, *firstlinkfile, nodigest, psm);
+	wfd_close(firstlinkfile);
 	*firsthardlink = -1;
     } else {
 	*setmeta = 0;
@@ -622,7 +653,7 @@ static int fsmUtime(const char *path, mode_t mode, time_t mtime)
     return rc;
 }
 
-static int fsmVerify(const char *path, rpmfi fi)
+static int fsmVerify(const char *path, rpmfi fi, const struct stat *fsb)
 {
     int rc;
     int saveerrno = errno;
@@ -647,11 +678,14 @@ static int fsmVerify(const char *path, rpmfi fi)
     } else if (S_ISDIR(mode)) {
         if (S_ISDIR(dsb.st_mode)) return 0;
         if (S_ISLNK(dsb.st_mode)) {
+	    uid_t luid = dsb.st_uid;
             rc = fsmStat(path, 0, &dsb);
             if (rc == RPMERR_ENOENT) rc = 0;
             if (rc) return rc;
             errno = saveerrno;
-            if (S_ISDIR(dsb.st_mode)) return 0;
+	    /* Only permit directory symlinks by target owner and root */
+            if (S_ISDIR(dsb.st_mode) && (luid == 0 || luid == fsb->st_uid))
+		    return 0;
         }
     } else if (S_ISLNK(mode)) {
         if (S_ISLNK(dsb.st_mode)) {
@@ -830,6 +864,7 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
     int nodigest = (rpmtsFlags(ts) & RPMTRANS_FLAG_NOFILEDIGEST) ? 1 : 0;
     int nofcaps = (rpmtsFlags(ts) & RPMTRANS_FLAG_NOCAPS) ? 1 : 0;
     int firsthardlink = -1;
+    FD_t firstlinkfile = NULL;
     int skip;
     rpmFileAction action;
     char *tid = NULL;
@@ -893,7 +928,7 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
 	    }
 	    /* Assume file does't exist when tmp suffix is in use */
 	    if (!suffix) {
-		rc = fsmVerify(fpath, fi);
+		rc = fsmVerify(fpath, fi, &sb);
 	    } else {
 		rc = (action == FA_TOUCH) ? 0 : RPMERR_ENOENT;
 	    }
@@ -901,7 +936,7 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
             if (S_ISREG(sb.st_mode)) {
 		if (rc == RPMERR_ENOENT) {
 		    rc = fsmMkfile(fi, fpath, files, psm, nodigest,
-				   &setmeta, &firsthardlink);
+				   &setmeta, &firsthardlink, &firstlinkfile);
 		}
             } else if (S_ISDIR(sb.st_mode)) {
                 if (rc == RPMERR_ENOENT) {
@@ -939,7 +974,8 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
 	    /* we skip the hard linked file containing the content */
 	    /* write the content to the first used instead */
 	    char *fn = rpmfilesFN(files, firsthardlink);
-	    rc = expandRegular(fi, fn, psm, nodigest, 0);
+	    rc = rpmfiArchiveReadToFilePsm(fi, firstlinkfile, nodigest, psm);
+	    wfd_close(&firstlinkfile);
 	    firsthardlink = -1;
 	    free(fn);
 	}
